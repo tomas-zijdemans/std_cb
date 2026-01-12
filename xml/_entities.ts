@@ -8,18 +8,6 @@
  */
 
 /**
- * The five predefined XML entities per XML 1.0 §4.6.
- * Using const assertion for precise typing.
- */
-const NAMED_ENTITIES = {
-  lt: "<",
-  gt: ">",
-  amp: "&",
-  apos: "'",
-  quot: '"',
-} as const;
-
-/**
  * Reverse mapping for encoding special characters.
  */
 const CHAR_TO_ENTITY = {
@@ -140,12 +128,22 @@ export function decodeEntities(
       }
       return String.fromCodePoint(codePoint);
     }
-    // Named entity
-    if (entity in NAMED_ENTITIES) {
-      return NAMED_ENTITIES[entity as keyof typeof NAMED_ENTITIES];
+    // Named entity - use switch for optimal performance
+    switch (entity) {
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "amp":
+        return "&";
+      case "apos":
+        return "'";
+      case "quot":
+        return '"';
+      default:
+        // Unknown entity - return as-is
+        return match;
     }
-    // Unknown entity - return as-is
-    return match;
   });
 }
 
