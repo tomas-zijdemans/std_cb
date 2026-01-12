@@ -35,6 +35,20 @@ import {
   WHITESPACE_ONLY_RE,
 } from "./_common.ts";
 
+// Character codes for hot path optimization
+const CC_LT = 60; // <
+const CC_GT = 62; // >
+const CC_SLASH = 47; // /
+const CC_BANG = 33; // !
+const CC_QUESTION = 63; // ?
+const CC_EQ = 61; // =
+const CC_DQUOTE = 34; // "
+const CC_SQUOTE = 39; // '
+const CC_LF = 10; // \n
+const CC_LBRACKET = 91; // [
+const CC_RBRACKET = 93; // ]
+const CC_DASH = 45; // -
+
 /** Internal mutable type for building the tree. */
 type MutableElement = {
   type: "element";
@@ -84,7 +98,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
    * Advances the position by one character, updating line/column.
    */
   function advance(): void {
-    if (input[pos] === "\n") {
+    if (input.charCodeAt(pos) === CC_LF) {
       line++;
       col = 1;
     } else {
@@ -138,14 +152,14 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
    * Reads a quoted attribute value and normalizes it per XML 1.0 §3.3.3.
    */
   function readQuotedValue(): string {
-    const quote = input[pos];
-    if (quote !== '"' && quote !== "'") {
+    const quoteCode = input.charCodeAt(pos);
+    if (quoteCode !== CC_DQUOTE && quoteCode !== CC_SQUOTE) {
       error("Expected quote to start attribute value");
     }
     advance();
     const start = pos;
-    while (pos < len && input[pos] !== quote) {
-      if (input[pos] === "<") {
+    while (pos < len && input.charCodeAt(pos) !== quoteCode) {
+      if (input.charCodeAt(pos) === CC_LT) {
         error("'<' not allowed in attribute value");
       }
       advance();
@@ -165,7 +179,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
    */
   function readText(): string {
     const start = pos;
-    while (pos < len && input[pos] !== "<") {
+    while (pos < len && input.charCodeAt(pos) !== CC_LT) {
       advance();
     }
     return decodeEntities(input.slice(start, pos));
@@ -206,7 +220,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
   // Main parsing loop
   while (pos < len) {
     // Handle text content first (early continue)
-    if (input[pos] !== "<") {
+    if (input.charCodeAt(pos) !== CC_LT) {
       const text = readText();
       addTextNode(text);
       continue;
@@ -218,14 +232,14 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       error("Unexpected end of input after '<'");
     }
 
-    const c = input[pos]!;
+    const code = input.charCodeAt(pos);
 
     // End tag: </name>
-    if (c === "/") {
+    if (code === CC_SLASH) {
       advance();
       const name = readName();
       skipWhitespace();
-      if (input[pos] !== ">") {
+      if (input.charCodeAt(pos) !== CC_GT) {
         error("Expected '>' in end tag");
       }
       advance();
@@ -251,11 +265,15 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
     }
 
     // Comment, CDATA, or DOCTYPE
-    if (c === "!") {
+    if (code === CC_BANG) {
       advance();
 
       // Comment: <!--...-->
-      if (pos + 1 < len && input[pos] === "-" && input[pos + 1] === "-") {
+      if (
+        pos + 1 < len &&
+        input.charCodeAt(pos) === CC_DASH &&
+        input.charCodeAt(pos + 1) === CC_DASH
+      ) {
         pos += 2;
         col += 2;
         const start = pos;
@@ -321,14 +339,15 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         col += 7;
 
         // Skip DOCTYPE content (we don't use it for tree building)
-        while (pos < len && input[pos] !== ">") {
-          if (input[pos] === "[") {
+        while (pos < len && input.charCodeAt(pos) !== CC_GT) {
+          if (input.charCodeAt(pos) === CC_LBRACKET) {
             // Internal subset - skip until matching ]
             let depth = 1;
             advance();
             while (pos < len && depth > 0) {
-              if (input[pos] === "[") depth++;
-              else if (input[pos] === "]") depth--;
+              const dc = input.charCodeAt(pos);
+              if (dc === CC_LBRACKET) depth++;
+              else if (dc === CC_RBRACKET) depth--;
               advance();
             }
           } else {
@@ -343,7 +362,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
     }
 
     // Processing instruction or XML declaration: <?target content?>
-    if (c === "?") {
+    if (code === CC_QUESTION) {
       advance();
       const target = readName();
       const contentStart = pos;
@@ -399,7 +418,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
     // Start tag: <name attributes...> or <name attributes.../>
     const name = readName();
     if (name === "") {
-      error(`Unexpected character '${c}' after '<'`);
+      error(`Unexpected character '${String.fromCharCode(code)}' after '<'`);
     }
 
     const elementName = parseName(name);
@@ -413,16 +432,16 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         error("Unexpected end of input in start tag");
       }
 
-      const ch = input[pos]!;
+      const chCode = input.charCodeAt(pos);
 
-      if (ch === ">") {
+      if (chCode === CC_GT) {
         advance();
         break;
       }
 
-      if (ch === "/") {
+      if (chCode === CC_SLASH) {
         advance();
-        if (input[pos] !== ">") {
+        if (input.charCodeAt(pos) !== CC_GT) {
           error("Expected '>' after '/' in self-closing tag");
         }
         advance();
@@ -433,11 +452,13 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       // Read attribute
       const attrName = readName();
       if (attrName === "") {
-        error(`Unexpected character '${ch}' in start tag`);
+        error(
+          `Unexpected character '${String.fromCharCode(chCode)}' in start tag`,
+        );
       }
 
       skipWhitespace();
-      if (input[pos] !== "=") {
+      if (input.charCodeAt(pos) !== CC_EQ) {
         error("Expected '=' after attribute name");
       }
       advance();
