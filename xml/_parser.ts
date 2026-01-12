@@ -45,7 +45,10 @@ import { parseName, WHITESPACE_ONLY_RE } from "./_common.ts";
 function normalizeAttributeValue(raw: string): string {
   // Step 1: Replace literal whitespace with space per §3.3.3
   // This is done BEFORE entity decoding to preserve char refs like &#10;
-  const normalized = raw.replace(/[\t\n]/g, " ");
+  // Fast path: skip regex if no whitespace to normalize (common case)
+  const normalized = raw.includes("\t") || raw.includes("\n")
+    ? raw.replace(/[\t\n]/g, " ")
+    : raw;
 
   // Step 2: Decode entities (&#10; becomes actual \n, preserving char refs)
   return decodeEntities(normalized);
