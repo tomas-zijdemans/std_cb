@@ -7,31 +7,6 @@
  * @module
  */
 
-/**
- * Reverse mapping for encoding special characters.
- */
-const CHAR_TO_ENTITY = {
-  "<": "&lt;",
-  ">": "&gt;",
-  "&": "&amp;",
-  "'": "&apos;",
-  '"': "&quot;",
-} as const;
-
-/**
- * Extended mapping for attribute value encoding (includes whitespace).
- */
-const ATTR_CHAR_MAP: Record<string, string> = {
-  "<": "&lt;",
-  ">": "&gt;",
-  "&": "&amp;",
-  "'": "&apos;",
-  '"': "&quot;",
-  "\t": "&#9;",
-  "\n": "&#10;",
-  "\r": "&#13;",
-};
-
 // Hoisted regex patterns for performance
 const ENTITY_RE = /&([a-zA-Z]+|#[0-9]+|#x[0-9a-fA-F]+);/g;
 const SPECIAL_CHARS_RE = /[<>&'"]/g;
@@ -156,10 +131,22 @@ export function decodeEntities(
 export function encodeEntities(text: string): string {
   // Fast path: no special characters means nothing to encode
   if (!/[<>&'"]/.test(text)) return text;
-  return text.replace(
-    SPECIAL_CHARS_RE,
-    (char) => CHAR_TO_ENTITY[char as keyof typeof CHAR_TO_ENTITY],
-  );
+  return text.replace(SPECIAL_CHARS_RE, (char) => {
+    switch (char) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case "'":
+        return "&apos;";
+      case '"':
+        return "&quot;";
+      default:
+        return char;
+    }
+  });
 }
 
 /**
@@ -172,5 +159,26 @@ export function encodeEntities(text: string): string {
 export function encodeAttributeValue(value: string): string {
   // Fast path: no special characters means nothing to encode
   if (!/[<>&'"\t\n\r]/.test(value)) return value;
-  return value.replace(ATTR_ENCODE_RE, (c) => ATTR_CHAR_MAP[c]!);
+  return value.replace(ATTR_ENCODE_RE, (c) => {
+    switch (c) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case "'":
+        return "&apos;";
+      case '"':
+        return "&quot;";
+      case "\t":
+        return "&#9;";
+      case "\n":
+        return "&#10;";
+      case "\r":
+        return "&#13;";
+      default:
+        return c;
+    }
+  });
 }
