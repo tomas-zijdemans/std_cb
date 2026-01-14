@@ -25,7 +25,7 @@ import type {
 import { XmlSyntaxError } from "./types.ts";
 import type { XmlToken } from "./_tokenizer.ts";
 import { decodeEntities } from "./_entities.ts";
-import { parseName, WHITESPACE_ONLY_RE } from "./_common.ts";
+import { createCachedNameParser, WHITESPACE_ONLY_RE } from "./_common.ts";
 
 /**
  * Normalizes attribute value per XML 1.0 §3.3.3.
@@ -80,6 +80,8 @@ export class XmlEventParser {
     offset: number;
   } | null = null;
   #options: ParseStreamOptions;
+  /** Cached name parser - avoids repeated allocations for the same element/attribute names. */
+  #parseName = createCachedNameParser();
 
   /**
    * Constructs a new XmlEventParser.
@@ -146,7 +148,7 @@ export class XmlEventParser {
         case "attribute": {
           if (this.#pendingStartElement) {
             this.#pendingStartElement.attributes.push({
-              name: parseName(token.name),
+              name: this.#parseName(token.name),
               value: normalizeAttributeValue(token.value),
             });
           }
@@ -155,7 +157,7 @@ export class XmlEventParser {
 
         case "start_tag_close": {
           if (this.#pendingStartElement) {
-            const name = parseName(this.#pendingStartElement.name);
+            const name = this.#parseName(this.#pendingStartElement.name);
             const { line, column, offset } = this.#pendingStartElement;
 
             events.push(
@@ -212,7 +214,7 @@ export class XmlEventParser {
           events.push(
             {
               type: "end_element",
-              name: parseName(token.name),
+              name: this.#parseName(token.name),
               line: token.position.line,
               column: token.position.column,
               offset: token.position.offset,
