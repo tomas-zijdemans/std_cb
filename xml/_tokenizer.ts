@@ -463,6 +463,89 @@ export class XmlTokenizer {
     };
   }
 
+  // ========================================================================
+  // DEDICATED CAPTURE METHODS
+  // These tight loops avoid per-character switch overhead for hot paths.
+  // ========================================================================
+
+  /**
+   * Capture text content in a tight loop until '<' is found.
+   * Returns true if '<' was found, false if end of buffer reached.
+   *
+   * This replaces the char-by-char approach in State.INITIAL with a
+   * single-purpose loop that has better branch prediction and JIT optimization.
+   */
+  #captureText(buffer: string, bufferLen: number): boolean {
+    // Initialize text tracking if this is the start of a new text node
+    if (this.#textStartIdx === -1) {
+      if (this.#trackPosition) {
+        this.#textStartLine = this.#line;
+        this.#textStartColumn = this.#column;
+        this.#textStartOffset = this.#offset;
+      }
+      this.#textStartIdx = this.#bufferIndex;
+    }
+
+    // Tight loop: scan for '<' with minimal overhead
+    if (this.#trackPosition) {
+      while (this.#bufferIndex < bufferLen) {
+        const code = buffer.charCodeAt(this.#bufferIndex);
+        if (code === CC_LT) {
+          return true; // Found '<', exit loop
+        }
+        // Update position tracking
+        if (code === CC_LF) {
+          this.#line++;
+          this.#column = 1;
+        } else {
+          this.#column++;
+        }
+        this.#offset++;
+        this.#bufferIndex++;
+      }
+    } else {
+      // Fast path without position tracking
+      while (this.#bufferIndex < bufferLen) {
+        if (buffer.charCodeAt(this.#bufferIndex) === CC_LT) {
+          return true;
+        }
+        this.#bufferIndex++;
+      }
+    }
+
+    return false; // End of buffer, need more data
+  }
+
+  /**
+   * Capture an XML name (element or attribute name) in a tight loop.
+   * Returns the captured name, or empty string if no valid name found.
+   *
+   * Assumes the first character has already been validated as NameStartChar.
+   * Continues until a non-NameChar is encountered.
+   */
+  #captureNameChars(buffer: string, bufferLen: number): void {
+    // Tight loop: scan NameChar characters
+    if (this.#trackPosition) {
+      while (this.#bufferIndex < bufferLen) {
+        const code = buffer.charCodeAt(this.#bufferIndex);
+        if (!this.#isNameCharCode(code)) {
+          return; // End of name
+        }
+        this.#column++;
+        this.#offset++;
+        this.#bufferIndex++;
+      }
+    } else {
+      // Fast path without position tracking
+      while (this.#bufferIndex < bufferLen) {
+        if (!this.#isNameCharCode(buffer.charCodeAt(this.#bufferIndex))) {
+          return;
+        }
+        this.#bufferIndex++;
+      }
+    }
+  }
+
   /**
    * Process a chunk of XML text and return tokens.
    *
@@ -494,86 +577,110 @@ export class XmlTokenizer {
         // === HOT PATH: Most frequently hit states ===
 
         case State.INITIAL: {
-          if (code === CC_LT) {
+          // Use dedicated capture method for tight-loop text scanning
+          if (this.#captureText(buffer, bufferLen)) {
+            // Found '<' - flush text and transition to TAG_OPEN
             this.#flushText();
             this.#saveTokenPosition();
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(CC_LT);
             this.#state = State.TAG_OPEN;
-          } else {
-            if (this.#textStartIdx === -1) {
-              if (this.#trackPosition) {
-                this.#textStartLine = this.#line;
-                this.#textStartColumn = this.#column;
-                this.#textStartOffset = this.#offset;
-              }
-              this.#textStartIdx = this.#bufferIndex;
-            }
-            this.#advanceWithCode(code);
           }
+          // If captureText returns false, we've consumed all input
+          // and will exit the main loop naturally
           break;
         }
 
         case State.TAG_NAME: {
-          if (this.#isNameCharCode(code)) {
-            this.#advanceWithCode(code);
-          } else if (this.#isWhitespaceCode(code)) {
+          // Use dedicated capture method for tight-loop name scanning
+          this.#captureNameChars(buffer, bufferLen);
+
+          // Check what character ended the name (if any)
+          if (this.#bufferIndex >= bufferLen) {
+            // End of buffer - need more data, stay in TAG_NAME state
+            break;
+          }
+
+          // Get the terminating character
+          const termCode = buffer.charCodeAt(this.#bufferIndex);
+          if (this.#isWhitespaceCode(termCode)) {
             this.#emit({
               type: "start_tag_open",
               name: this.#getTagName(),
               position: this.#getTokenPosition(),
             });
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.AFTER_TAG_NAME;
-          } else if (code === CC_GT) {
+          } else if (termCode === CC_GT) {
             this.#emit({
               type: "start_tag_open",
               name: this.#getTagName(),
               position: this.#getTokenPosition(),
             });
             this.#emit({ type: "start_tag_close", selfClosing: false });
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.INITIAL;
-          } else if (code === CC_SLASH) {
+          } else if (termCode === CC_SLASH) {
             this.#emit({
               type: "start_tag_open",
               name: this.#getTagName(),
               position: this.#getTokenPosition(),
             });
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.EXPECT_SELF_CLOSE_GT;
           } else {
             this.#error(
-              `Unexpected character '${String.fromCharCode(code)}' in tag name`,
+              `Unexpected character '${
+                String.fromCharCode(termCode)
+              }' in tag name`,
             );
           }
           break;
         }
 
         case State.END_TAG_NAME: {
+          // Handle first character (must be NameStartChar)
           if (
             this.#tagNameStartIdx === this.#bufferIndex &&
-            this.#tagNamePartial === "" &&
-            this.#isNameStartCharCode(code)
+            this.#tagNamePartial === ""
           ) {
+            if (!this.#isNameStartCharCode(code)) {
+              this.#error(
+                `Unexpected character '${
+                  String.fromCharCode(code)
+                }' in end tag`,
+              );
+            }
             this.#advanceWithCode(code);
-          } else if (this.#isNameCharCode(code)) {
-            this.#advanceWithCode(code);
-          } else if (this.#isWhitespaceCode(code)) {
+          }
+
+          // Use dedicated capture method for tight-loop name scanning
+          this.#captureNameChars(buffer, bufferLen);
+
+          // Check what character ended the name (if any)
+          if (this.#bufferIndex >= bufferLen) {
+            // End of buffer - need more data
+            break;
+          }
+
+          const termCode = buffer.charCodeAt(this.#bufferIndex);
+          if (this.#isWhitespaceCode(termCode)) {
             const name = this.#getTagName();
             this.#tagNamePartial = name; // Store temporarily
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.AFTER_END_TAG_NAME;
-          } else if (code === CC_GT) {
+          } else if (termCode === CC_GT) {
             this.#emit({
               type: "end_tag",
               name: this.#getTagName(),
               position: this.#getTokenPosition(),
             });
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.INITIAL;
           } else {
             this.#error(
-              `Unexpected character '${String.fromCharCode(code)}' in end tag`,
+              `Unexpected character '${
+                String.fromCharCode(termCode)
+              }' in end tag`,
             );
           }
           break;
@@ -623,23 +730,31 @@ export class XmlTokenizer {
         }
 
         case State.ATTRIBUTE_NAME: {
-          if (this.#isNameCharCode(code)) {
-            this.#advanceWithCode(code);
-          } else if (this.#isWhitespaceCode(code)) {
+          // Use dedicated capture method for tight-loop name scanning
+          this.#captureNameChars(buffer, bufferLen);
+
+          // Check what character ended the name (if any)
+          if (this.#bufferIndex >= bufferLen) {
+            // End of buffer - need more data
+            break;
+          }
+
+          const termCode = buffer.charCodeAt(this.#bufferIndex);
+          if (this.#isWhitespaceCode(termCode)) {
             // Save the attribute name before transitioning
             const name = this.#getAttrName();
             this.#attrNamePartial = name; // Store temporarily
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.AFTER_ATTRIBUTE_NAME;
-          } else if (code === CC_EQ) {
+          } else if (termCode === CC_EQ) {
             const name = this.#getAttrName();
             this.#attrNamePartial = name; // Store temporarily
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(termCode);
             this.#state = State.BEFORE_ATTRIBUTE_VALUE;
           } else {
             this.#error(
               `Unexpected character '${
-                String.fromCharCode(code)
+                String.fromCharCode(termCode)
               }' in attribute name`,
             );
           }
