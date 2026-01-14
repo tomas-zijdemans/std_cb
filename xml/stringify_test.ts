@@ -11,7 +11,7 @@ import type { XmlDocument, XmlElement } from "./types.ts";
 Deno.test("stringify() serializes empty element", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [],
   };
@@ -22,7 +22,7 @@ Deno.test("stringify() serializes empty element", () => {
 Deno.test("stringify() serializes element with text content", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "greeting" },
+    name: { raw: "greeting", local: "greeting" },
     attributes: {},
     children: [{ type: "text", text: "Hello!" }],
   };
@@ -33,12 +33,12 @@ Deno.test("stringify() serializes element with text content", () => {
 Deno.test("stringify() serializes nested elements", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [
       {
         type: "element",
-        name: { local: "child" },
+        name: { raw: "child", local: "child" },
         attributes: {},
         children: [],
       },
@@ -55,7 +55,7 @@ Deno.test("stringify() serializes nested elements", () => {
 Deno.test("stringify() includes namespace prefix in tag name", () => {
   const element: XmlElement = {
     type: "element",
-    name: { prefix: "ns", local: "element" },
+    name: { raw: "ns:element", prefix: "ns", local: "element" },
     attributes: {},
     children: [],
   };
@@ -70,7 +70,7 @@ Deno.test("stringify() includes namespace prefix in tag name", () => {
 Deno.test("stringify() serializes single attribute", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "item" },
+    name: { raw: "item", local: "item" },
     attributes: { id: "123" },
     children: [],
   };
@@ -81,7 +81,7 @@ Deno.test("stringify() serializes single attribute", () => {
 Deno.test("stringify() serializes multiple attributes", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "item" },
+    name: { raw: "item", local: "item" },
     attributes: { id: "1", class: "main" },
     children: [],
   };
@@ -92,7 +92,7 @@ Deno.test("stringify() serializes multiple attributes", () => {
 Deno.test("stringify() encodes special characters in attributes", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "item" },
+    name: { raw: "item", local: "item" },
     attributes: { name: 'Tom & "Jerry"' },
     children: [],
   };
@@ -106,7 +106,7 @@ Deno.test("stringify() encodes special characters in attributes", () => {
 Deno.test("stringify() encodes whitespace in attributes", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "item" },
+    name: { raw: "item", local: "item" },
     attributes: { data: "line1\nline2\ttab" },
     children: [],
   };
@@ -121,7 +121,7 @@ Deno.test("stringify() encodes whitespace in attributes", () => {
 Deno.test("stringify() encodes special characters in text", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "text", text: "<script>&</script>" }],
   };
@@ -135,7 +135,7 @@ Deno.test("stringify() encodes special characters in text", () => {
 Deno.test("stringify() preserves whitespace in text", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "text", text: "  spaces  " }],
   };
@@ -150,7 +150,7 @@ Deno.test("stringify() preserves whitespace in text", () => {
 Deno.test("stringify() serializes CDATA section", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "<not>xml</not>" }],
   };
@@ -161,7 +161,7 @@ Deno.test("stringify() serializes CDATA section", () => {
 Deno.test("stringify() does not encode entities in CDATA", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "&amp; stays &amp;" }],
   };
@@ -179,7 +179,7 @@ Deno.test("stringify() does not encode entities in CDATA", () => {
 Deno.test("stringify() serializes comments", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "comment", text: " comment " }],
   };
@@ -194,13 +194,13 @@ Deno.test("stringify() serializes comments", () => {
 Deno.test("stringify() serializes mixed content", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [
       { type: "text", text: "text" },
       {
         type: "element",
-        name: { local: "child" },
+        name: { raw: "child", local: "child" },
         attributes: {},
         children: [],
       },
@@ -226,7 +226,7 @@ Deno.test("stringify() includes XML declaration from document", () => {
     },
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -247,7 +247,7 @@ Deno.test("stringify() includes encoding in declaration", () => {
     },
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -268,7 +268,7 @@ Deno.test("stringify() includes standalone in declaration", () => {
     },
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -288,7 +288,7 @@ Deno.test("stringify() omits declaration when option is false", () => {
     },
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -301,7 +301,7 @@ Deno.test("stringify() handles document without declaration", () => {
   const doc: XmlDocument = {
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -317,12 +317,12 @@ Deno.test("stringify() handles document without declaration", () => {
 Deno.test("stringify() pretty-prints with indent option", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [
       {
         type: "element",
-        name: { local: "child" },
+        name: { raw: "child", local: "child" },
         attributes: {},
         children: [],
       },
@@ -338,17 +338,17 @@ Deno.test("stringify() pretty-prints with indent option", () => {
 Deno.test("stringify() pretty-prints deeply nested elements", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "a" },
+    name: { raw: "a", local: "a" },
     attributes: {},
     children: [
       {
         type: "element",
-        name: { local: "b" },
+        name: { raw: "b", local: "b" },
         attributes: {},
         children: [
           {
             type: "element",
-            name: { local: "c" },
+            name: { raw: "c", local: "c" },
             attributes: {},
             children: [],
           },
@@ -366,7 +366,7 @@ Deno.test("stringify() pretty-prints deeply nested elements", () => {
 Deno.test("stringify() keeps text content inline when pretty-printing", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "p" },
+    name: { raw: "p", local: "p" },
     attributes: {},
     children: [{ type: "text", text: "Hello World" }],
   };
@@ -385,7 +385,7 @@ Deno.test("stringify() pretty-prints declaration on separate line", () => {
     },
     root: {
       type: "element",
-      name: { local: "root" },
+      name: { raw: "root", local: "root" },
       attributes: {},
       children: [],
     },
@@ -400,13 +400,13 @@ Deno.test("stringify() pretty-prints declaration on separate line", () => {
 Deno.test("stringify() pretty-prints comments", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [
       { type: "comment", text: " comment " },
       {
         type: "element",
-        name: { local: "child" },
+        name: { raw: "child", local: "child" },
         attributes: {},
         children: [],
       },
@@ -435,17 +435,17 @@ Deno.test("stringify() handles complex document", () => {
     },
     root: {
       type: "element",
-      name: { local: "catalog" },
+      name: { raw: "catalog", local: "catalog" },
       attributes: {},
       children: [
         {
           type: "element",
-          name: { local: "product" },
+          name: { raw: "product", local: "product" },
           attributes: { id: "1" },
           children: [
             {
               type: "element",
-              name: { local: "name" },
+              name: { raw: "name", local: "name" },
               attributes: {},
               children: [{ type: "text", text: "Widget" }],
             },
@@ -472,7 +472,7 @@ Deno.test("stringify() handles complex document", () => {
 Deno.test("stringify() handles Unicode content", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "text", text: "日本語 🎉 émoji" }],
   };
@@ -483,7 +483,7 @@ Deno.test("stringify() handles Unicode content", () => {
 Deno.test("stringify() handles empty string attribute", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "item" },
+    name: { raw: "item", local: "item" },
     attributes: { value: "" },
     children: [],
   };
@@ -498,7 +498,7 @@ Deno.test("stringify() handles empty string attribute", () => {
 Deno.test("stringify() escapes ]]> in CDATA by splitting", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "contains ]]> sequence" }],
   };
@@ -512,7 +512,7 @@ Deno.test("stringify() escapes ]]> in CDATA by splitting", () => {
 Deno.test("stringify() escapes multiple ]]> in CDATA", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "a]]>b]]>c" }],
   };
@@ -526,7 +526,7 @@ Deno.test("stringify() escapes multiple ]]> in CDATA", () => {
 Deno.test("stringify() handles ]]> at start of CDATA", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "]]>text" }],
   };
@@ -540,7 +540,7 @@ Deno.test("stringify() handles ]]> at start of CDATA", () => {
 Deno.test("stringify() handles ]]> at end of CDATA", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "cdata", text: "text]]>" }],
   };
@@ -558,7 +558,7 @@ Deno.test("stringify() handles ]]> at end of CDATA", () => {
 Deno.test("stringify() throws for -- in comment", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "comment", text: "contains -- sequence" }],
   };
@@ -573,7 +573,7 @@ Deno.test("stringify() throws for -- in comment", () => {
 Deno.test("stringify() throws for comment ending with -", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "comment", text: "ends with hyphen-" }],
   };
@@ -588,7 +588,7 @@ Deno.test("stringify() throws for comment ending with -", () => {
 Deno.test("stringify() allows single hyphen in comment", () => {
   const element: XmlElement = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [{ type: "comment", text: " single-hyphen is fine " }],
   };

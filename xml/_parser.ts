@@ -18,6 +18,7 @@ import type {
   XmlDeclarationEvent,
   XmlEndElementEvent,
   XmlEvent,
+  XmlName,
   XmlProcessingInstructionEvent,
   XmlStartElementEvent,
   XmlTextEvent,
@@ -70,7 +71,13 @@ function normalizeAttributeValue(raw: string): string {
  */
 export class XmlEventParser {
   #elementStack: Array<
-    { name: string; line: number; column: number; offset: number }
+    {
+      rawName: string;
+      parsedName: XmlName;
+      line: number;
+      column: number;
+      offset: number;
+    }
   > = [];
   /** Pre-allocated pending element - reused to avoid allocations per element. */
   #pendingStartElement = {
@@ -188,7 +195,8 @@ export class XmlEventParser {
               );
             } else {
               this.#elementStack.push({
-                name: this.#pendingStartElement.name,
+                rawName: this.#pendingStartElement.name,
+                parsedName: name,
                 line,
                 column,
                 offset,
@@ -208,17 +216,18 @@ export class XmlEventParser {
               token.position,
             );
           }
-          if (expected.name !== token.name) {
+          if (expected.rawName !== token.name) {
             throw new XmlSyntaxError(
-              `Mismatched closing tag: expected </${expected.name}> but found </${token.name}>`,
+              `Mismatched closing tag: expected </${expected.rawName}> but found </${token.name}>`,
               token.position,
             );
           }
 
+          // Reuse the parsed name from the opening tag - avoids redundant parseName call
           events.push(
             {
               type: "end_element",
-              name: this.#parseName(token.name),
+              name: expected.parsedName,
               line: token.position.line,
               column: token.position.column,
               offset: token.position.offset,
@@ -319,7 +328,10 @@ export class XmlEventParser {
   finalize(): void {
     if (this.#elementStack.length > 0) {
       const unclosed = this.#elementStack[this.#elementStack.length - 1]!;
-      throw new XmlSyntaxError(`Unclosed element <${unclosed.name}>`, unclosed);
+      throw new XmlSyntaxError(
+        `Unclosed element <${unclosed.rawName}>`,
+        unclosed,
+      );
     }
   }
 }

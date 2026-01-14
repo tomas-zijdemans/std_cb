@@ -17,7 +17,7 @@ import type { XmlNode } from "./types.ts";
 Deno.test("isElement() returns true for element nodes", () => {
   const node: XmlNode = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [],
   };
@@ -42,7 +42,7 @@ Deno.test("isText() returns true for text nodes", () => {
 Deno.test("isText() returns false for non-text nodes", () => {
   const element: XmlNode = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [],
   };
@@ -62,7 +62,7 @@ Deno.test("isCData() returns true for CDATA nodes", () => {
 Deno.test("isCData() returns false for non-CDATA nodes", () => {
   const element: XmlNode = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [],
   };
@@ -82,7 +82,7 @@ Deno.test("isComment() returns true for comment nodes", () => {
 Deno.test("isComment() returns false for non-comment nodes", () => {
   const element: XmlNode = {
     type: "element",
-    name: { local: "root" },
+    name: { raw: "root", local: "root" },
     attributes: {},
     children: [],
   };
@@ -123,11 +123,21 @@ Deno.test("XmlSyntaxError is instanceof SyntaxError", () => {
 
 Deno.test("type guards work for filtering arrays", () => {
   const nodes: XmlNode[] = [
-    { type: "element", name: { local: "a" }, attributes: {}, children: [] },
+    {
+      type: "element",
+      name: { raw: "a", local: "a" },
+      attributes: {},
+      children: [],
+    },
     { type: "text", text: "hello" },
     { type: "cdata", text: "data" },
     { type: "comment", text: "note" },
-    { type: "element", name: { local: "b" }, attributes: {}, children: [] },
+    {
+      type: "element",
+      name: { raw: "b", local: "b" },
+      attributes: {},
+      children: [],
+    },
   ];
 
   const elements = nodes.filter(isElement);
