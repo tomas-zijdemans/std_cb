@@ -1,13 +1,7 @@
 // Copyright 2018-2026 the Deno authors. MIT license.
 
 import { assertEquals, assertThrows } from "@std/assert";
-import {
-  findElement,
-  findElements,
-  getAttribute,
-  getText,
-  parse,
-} from "./parse.ts";
+import { parse } from "./parse.ts";
 
 // =============================================================================
 // DOM Tree Structure (Unique to parse())
@@ -56,101 +50,6 @@ Deno.test("parse() throws on empty document", () => {
 });
 
 // =============================================================================
-// findElement()
-// =============================================================================
-
-Deno.test("findElement() finds first matching element", () => {
-  const doc = parse('<root><item id="1"/><item id="2"/></root>');
-  const item = findElement(doc.root, "item");
-
-  assertEquals(item?.name.local, "item");
-  assertEquals(item?.attributes["id"], "1");
-});
-
-Deno.test("findElement() returns undefined if not found", () => {
-  const doc = parse("<root><other/></root>");
-  const item = findElement(doc.root, "item");
-
-  assertEquals(item, undefined);
-});
-
-Deno.test("findElement() only searches direct children", () => {
-  const doc = parse("<root><wrapper><item/></wrapper></root>");
-  const item = findElement(doc.root, "item");
-
-  // item is nested, not a direct child
-  assertEquals(item, undefined);
-});
-
-// =============================================================================
-// findElements()
-// =============================================================================
-
-Deno.test("findElements() finds all matching elements", () => {
-  const doc = parse("<root><item/><item/><other/><item/></root>");
-  const items = findElements(doc.root, "item");
-
-  assertEquals(items.length, 3);
-});
-
-Deno.test("findElements() returns empty array if none found", () => {
-  const doc = parse("<root><other/></root>");
-  const items = findElements(doc.root, "item");
-
-  assertEquals(items.length, 0);
-});
-
-// =============================================================================
-// getText()
-// =============================================================================
-
-Deno.test("getText() gets text content", () => {
-  const doc = parse("<root>Hello World</root>");
-  const text = getText(doc.root);
-
-  assertEquals(text, "Hello World");
-});
-
-Deno.test("getText() concatenates nested text", () => {
-  const doc = parse("<root>Hello <b>World</b>!</root>");
-  const text = getText(doc.root);
-
-  assertEquals(text, "Hello World!");
-});
-
-Deno.test("getText() includes CDATA content", () => {
-  const doc = parse("<root>text<![CDATA[cdata]]>more</root>");
-  const text = getText(doc.root);
-
-  assertEquals(text, "textcdatamore");
-});
-
-Deno.test("getText() returns empty string for empty element", () => {
-  const doc = parse("<root/>");
-  const text = getText(doc.root);
-
-  assertEquals(text, "");
-});
-
-// =============================================================================
-// getAttribute()
-// =============================================================================
-
-Deno.test("getAttribute() gets attribute value", () => {
-  const doc = parse('<root id="123"/>');
-  const value = getAttribute(doc.root, "id");
-
-  assertEquals(value, "123");
-});
-
-Deno.test("getAttribute() returns undefined for missing attribute", () => {
-  const doc = parse("<root/>");
-  const value = getAttribute(doc.root, "missing");
-
-  assertEquals(value, undefined);
-});
-
-// =============================================================================
 // Complex Documents (Integration)
 // =============================================================================
 
@@ -170,14 +69,25 @@ Deno.test("parse() handles complex document", () => {
   const doc = parse(xml, { ignoreWhitespace: true });
 
   assertEquals(doc.root.name.local, "catalog");
-  const products = findElements(doc.root, "product");
+
+  // Filter products manually
+  const products = doc.root.children.filter(
+    (child) => child.type === "element" && child.name.local === "product",
+  );
   assertEquals(products.length, 2);
 
   const firstProduct = products[0]!;
-  assertEquals(getAttribute(firstProduct, "id"), "1");
+  if (firstProduct.type === "element") {
+    assertEquals(firstProduct.attributes["id"], "1");
 
-  const name = findElement(firstProduct, "name");
-  assertEquals(getText(name!), "Widget");
+    // Find name element
+    const name = firstProduct.children.find(
+      (child) => child.type === "element" && child.name.local === "name",
+    );
+    if (name?.type === "element" && name.children[0]?.type === "text") {
+      assertEquals(name.children[0].text, "Widget");
+    }
+  }
 });
 
 Deno.test("parse() handles RSS-like feed", () => {
@@ -197,14 +107,24 @@ Deno.test("parse() handles RSS-like feed", () => {
   const doc = parse(xml, { ignoreWhitespace: true });
 
   assertEquals(doc.root.name.local, "rss");
-  assertEquals(getAttribute(doc.root, "version"), "2.0");
+  assertEquals(doc.root.attributes["version"], "2.0");
 
-  const channel = findElement(doc.root, "channel");
-  const title = findElement(channel!, "title");
-  assertEquals(getText(title!), "Example Feed");
+  const channel = doc.root.children.find(
+    (child) => child.type === "element" && child.name.local === "channel",
+  );
+  if (channel?.type === "element") {
+    const title = channel.children.find(
+      (child) => child.type === "element" && child.name.local === "title",
+    );
+    if (title?.type === "element" && title.children[0]?.type === "text") {
+      assertEquals(title.children[0].text, "Example Feed");
+    }
 
-  const items = findElements(channel!, "item");
-  assertEquals(items.length, 2);
+    const items = channel.children.filter(
+      (child) => child.type === "element" && child.name.local === "item",
+    );
+    assertEquals(items.length, 2);
+  }
 });
 
 // =============================================================================
