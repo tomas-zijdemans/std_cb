@@ -84,6 +84,28 @@ export type { ParseStreamOptions } from "./types.ts";
  *   }
  * }
  * ```
+ *
+ * @example With position tracking
+ * ```ts
+ * import { XmlParseStream } from "@std/xml/parse-stream";
+ * import { assertEquals } from "@std/assert";
+ *
+ * // Position tracking is disabled by default for streaming performance.
+ * // Enable it when you need line/column info for debugging or error reporting.
+ * const xml = `<root><item/></root>`;
+ *
+ * const stream = ReadableStream.from([xml])
+ *   .pipeThrough(new XmlParseStream({ trackPosition: true }));
+ *
+ * for await (const batch of stream) {
+ *   for (const event of batch) {
+ *     if (event.type === "start_element" && event.name.local === "item") {
+ *       assertEquals(event.line, 1);
+ *       assertEquals(event.column, 7);
+ *     }
+ *   }
+ * }
+ * ```
  */
 export class XmlParseStream extends TransformStream<string, XmlEvent[]> {
   /**

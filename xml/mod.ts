@@ -7,6 +7,19 @@
  * This module implements a non-validating XML 1.0 parser based on the
  * {@link https://www.w3.org/TR/xml/ | W3C XML 1.0 (Fifth Edition)} specification.
  *
+ * ## Position Tracking
+ *
+ * Both parsers support optional position tracking (line, column, offset) for
+ * debugging and error reporting:
+ *
+ * - **DOM parser ({@linkcode parse})**: Position tracking is **enabled by default**
+ *   to provide detailed error messages. Disable with `{ trackPosition: false }`
+ *   for a performance boost when parsing trusted XML.
+ *
+ * - **Streaming parser ({@linkcode XmlParseStream})**: Position tracking is
+ *   **disabled by default** for optimal streaming performance. Enable with
+ *   `{ trackPosition: true }` when you need position info in events.
+ *
  * ```ts ignore
  * import { parse, XmlParseStream } from "@std/xml";
  * import { assertEquals } from "@std/assert";

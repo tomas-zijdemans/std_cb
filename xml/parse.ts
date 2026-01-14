@@ -55,6 +55,19 @@ export type { ParseOptions } from "./types.ts";
  * assertEquals(doc.root.children.length, 1);
  * ```
  *
+ * @example Disabling position tracking for performance
+ * ```ts
+ * import { parse } from "@std/xml/parse";
+ * import { assertEquals } from "@std/assert";
+ *
+ * // Position tracking is enabled by default for better error messages.
+ * // Disable it for a performance boost when parsing trusted/valid XML.
+ * const xml = `<root><item/></root>`;
+ * const doc = parse(xml, { trackPosition: false });
+ *
+ * assertEquals(doc.root.name.local, "root");
+ * ```
+ *
  * @param xml The XML string to parse.
  * @param options Options to control parsing behavior.
  * @returns The parsed document.

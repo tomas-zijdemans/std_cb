@@ -312,7 +312,8 @@ export interface ParseOptions {
   /**
    * If true, track line/column positions for error messages.
    * Disabling position tracking improves performance but makes
-   * debugging harder as errors will be reported at offset only.
+   * debugging harder as all position fields (line, column, offset)
+   * will be reported as 0 in errors.
    *
    * @default {true}
    */
