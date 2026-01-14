@@ -72,6 +72,7 @@ type MutableElement = {
 export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
   const ignoreWhitespace = options?.ignoreWhitespace ?? false;
   const ignoreComments = options?.ignoreComments ?? false;
+  const trackPosition = options?.trackPosition ?? true;
 
   // Normalize line endings (XML 1.0 §2.11)
   const input = xml.includes("\r") ? xml.replace(LINE_ENDING_RE, "\n") : xml;
@@ -91,18 +92,25 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
    * Throws a syntax error at the current position.
    */
   function error(message: string): never {
-    throw new XmlSyntaxError(message, { line, column: col, offset: pos });
+    throw new XmlSyntaxError(
+      message,
+      trackPosition
+        ? { line, column: col, offset: pos }
+        : { line: 0, column: 0, offset: 0 },
+    );
   }
 
   /**
    * Advances the position by one character, updating line/column.
    */
   function advance(): void {
-    if (input.charCodeAt(pos) === CC_LF) {
-      line++;
-      col = 1;
-    } else {
-      col++;
+    if (trackPosition) {
+      if (input.charCodeAt(pos) === CC_LF) {
+        line++;
+        col = 1;
+      } else {
+        col++;
+      }
     }
     pos++;
   }
@@ -140,7 +148,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         code > 127 // non-ASCII
       ) {
         pos++;
-        col++;
+        if (trackPosition) col++;
       } else {
         break;
       }
@@ -275,7 +283,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         input.charCodeAt(pos + 1) === CC_DASH
       ) {
         pos += 2;
-        col += 2;
+        if (trackPosition) col += 2;
         const start = pos;
 
         // Use indexOf for fast delimiter search (92x faster for large comments)
@@ -287,26 +295,28 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         }
 
         // Update line/col by scanning for newlines in the comment
-        const content = input.slice(start, endIdx);
-        for (let i = 0; i < content.length; i++) {
-          if (content.charCodeAt(i) === 10) { // \n
-            line++;
-            col = 1;
-          } else {
-            col++;
+        if (trackPosition) {
+          const content = input.slice(start, endIdx);
+          for (let i = 0; i < content.length; i++) {
+            if (content.charCodeAt(i) === 10) { // \n
+              line++;
+              col = 1;
+            } else {
+              col++;
+            }
           }
         }
 
-        addCommentNode(content);
+        addCommentNode(input.slice(start, endIdx));
         pos = endIdx + 3;
-        col += 3;
+        if (trackPosition) col += 3;
         continue;
       }
 
       // CDATA: <![CDATA[...]]>
       if (pos + 6 < len && input.slice(pos, pos + 7) === "[CDATA[") {
         pos += 7;
-        col += 7;
+        if (trackPosition) col += 7;
         const start = pos;
 
         // Use indexOf for fast delimiter search (92x faster for large CDATA)
@@ -317,26 +327,28 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         }
 
         // Update line/col by scanning for newlines
-        const content = input.slice(start, endIdx);
-        for (let i = 0; i < content.length; i++) {
-          if (content.charCodeAt(i) === 10) {
-            line++;
-            col = 1;
-          } else {
-            col++;
+        if (trackPosition) {
+          const content = input.slice(start, endIdx);
+          for (let i = 0; i < content.length; i++) {
+            if (content.charCodeAt(i) === 10) {
+              line++;
+              col = 1;
+            } else {
+              col++;
+            }
           }
         }
 
-        addCDataNode(content);
+        addCDataNode(input.slice(start, endIdx));
         pos = endIdx + 3;
-        col += 3;
+        if (trackPosition) col += 3;
         continue;
       }
 
       // DOCTYPE: <!DOCTYPE...>
       if (pos + 6 < len && input.slice(pos, pos + 7) === "DOCTYPE") {
         pos += 7;
-        col += 7;
+        if (trackPosition) col += 7;
 
         // Skip DOCTYPE content (we don't use it for tree building)
         while (pos < len && input.charCodeAt(pos) !== CC_GT) {
@@ -375,18 +387,20 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       }
 
       // Update line/col by scanning for newlines
-      for (let i = pos; i < endIdx; i++) {
-        if (input.charCodeAt(i) === 10) {
-          line++;
-          col = 1;
-        } else {
-          col++;
+      if (trackPosition) {
+        for (let i = pos; i < endIdx; i++) {
+          if (input.charCodeAt(i) === 10) {
+            line++;
+            col = 1;
+          } else {
+            col++;
+          }
         }
       }
 
       const content = input.slice(contentStart, endIdx).trim();
       pos = endIdx + 2;
-      col += 2;
+      if (trackPosition) col += 2;
 
       // Direct comparison (6x faster than toLowerCase)
       if (target === "xml" || target === "XML") {
@@ -398,8 +412,8 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         declaration = {
           type: "declaration",
           version: versionMatch?.[1] ?? versionMatch?.[2] ?? "1.0",
-          line: 1,
-          column: 1,
+          line: trackPosition ? 1 : 0,
+          column: trackPosition ? 1 : 0,
           offset: 0,
           ...(encodingMatch && {
             encoding: encodingMatch[1] ?? encodingMatch[2],
@@ -501,7 +515,9 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
   if (!root) {
     throw new XmlSyntaxError(
       "No root element found in XML document",
-      { line: 1, column: 1, offset: 0 },
+      trackPosition
+        ? { line: 1, column: 1, offset: 0 }
+        : { line: 0, column: 0, offset: 0 },
     );
   }
 

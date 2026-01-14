@@ -109,7 +109,8 @@ export class XmlParseStream extends TransformStream<string, XmlEvent[]> {
    * ```
    */
   constructor(options: ParseStreamOptions = {}) {
-    const tokenizer = new XmlTokenizer();
+    const trackPosition = options.trackPosition ?? false;
+    const tokenizer = new XmlTokenizer({ trackPosition });
     const parser = new XmlEventParser(options);
 
     super({
