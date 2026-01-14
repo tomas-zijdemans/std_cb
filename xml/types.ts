@@ -270,6 +270,15 @@ export interface ParseStreamOptions {
    * @default {false}
    */
   readonly coerceCDataToText?: boolean;
+
+  /**
+   * If true, track line/column positions for events and error messages.
+   * Disabling position tracking improves performance by ~20% but makes
+   * debugging harder as all positions will be reported as line 0, column 0.
+   *
+   * @default {false}
+   */
+  readonly trackPosition?: boolean;
 }
 
 /**
@@ -299,6 +308,15 @@ export interface ParseOptions {
    * @default {false}
    */
   readonly ignoreComments?: boolean;
+
+  /**
+   * If true, track line/column positions for error messages.
+   * Disabling position tracking improves performance but makes
+   * debugging harder as errors will be reported at offset only.
+   *
+   * @default {true}
+   */
+  readonly trackPosition?: boolean;
 }
 
 /**
