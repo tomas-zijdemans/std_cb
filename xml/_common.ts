@@ -47,19 +47,20 @@ export const STANDALONE_RE = /standalone\s*=\s*(?:"(yes|no)"|'(yes|no)')/;
  * ```ts
  * import { parseName } from "./_common.ts";
  *
- * parseName("ns:element"); // { prefix: "ns", local: "element" }
- * parseName("element");    // { local: "element" }
+ * parseName("ns:element"); // { raw: "ns:element", prefix: "ns", local: "element" }
+ * parseName("element");    // { raw: "element", local: "element" }
  * ```
  *
  * @param name The raw name string (e.g., "ns:element" or "element")
- * @returns An XmlName object with local and optional prefix
+ * @returns An XmlName object with raw, local and optional prefix
  */
 export function parseName(name: string): XmlName {
   const colonIndex = name.indexOf(":");
   if (colonIndex === -1) {
-    return { local: name };
+    return { raw: name, local: name };
   }
   return {
+    raw: name,
     prefix: name.slice(0, colonIndex),
     local: name.slice(colonIndex + 1),
   };
@@ -92,12 +93,11 @@ export function createCachedNameParser(): (name: string) => XmlName {
       return cached;
     }
     const colonIndex = name.indexOf(":");
-    cached = colonIndex === -1
-      ? { local: name }
-      : {
-        prefix: name.slice(0, colonIndex),
-        local: name.slice(colonIndex + 1),
-      };
+    cached = colonIndex === -1 ? { raw: name, local: name } : {
+      raw: name,
+      prefix: name.slice(0, colonIndex),
+      local: name.slice(colonIndex + 1),
+    };
     cache[name] = cached;
     return cached;
   };

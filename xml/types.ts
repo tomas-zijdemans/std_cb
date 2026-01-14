@@ -95,10 +95,12 @@ export class XmlSyntaxError extends SyntaxError {
  * ```ts
  * import type { XmlName } from "@std/xml/types";
  *
- * const name: XmlName = { local: "item", prefix: "ns" };
+ * const name: XmlName = { raw: "ns:item", local: "item", prefix: "ns" };
  * ```
  */
 export interface XmlName {
+  /** The original unsplit name (e.g., "ns:item" or "item"). */
+  readonly raw: string;
   /** The local part of the name (after the colon, or the whole name). */
   readonly local: string;
   /** The namespace prefix (before the colon), if present. */
