@@ -72,13 +72,16 @@ export class XmlEventParser {
   #elementStack: Array<
     { name: string; line: number; column: number; offset: number }
   > = [];
-  #pendingStartElement: {
-    name: string;
-    attributes: XmlAttribute[];
-    line: number;
-    column: number;
-    offset: number;
-  } | null = null;
+  /** Pre-allocated pending element - reused to avoid allocations per element. */
+  #pendingStartElement = {
+    name: "",
+    attributes: [] as XmlAttribute[],
+    line: 0,
+    column: 0,
+    offset: 0,
+  };
+  /** Whether #pendingStartElement contains valid data. */
+  #hasPendingElement = false;
   #options: ParseStreamOptions;
   /** Cached name parser - avoids repeated allocations for the same element/attribute names. */
   #parseName = createCachedNameParser();
@@ -135,18 +138,19 @@ export class XmlEventParser {
         }
 
         case "start_tag_open": {
-          this.#pendingStartElement = {
-            name: token.name,
-            attributes: [],
-            line: token.position.line,
-            column: token.position.column,
-            offset: token.position.offset,
-          };
+          // Reuse pre-allocated object instead of creating new one
+          this.#pendingStartElement.name = token.name;
+          // Note: Must create new array since it's passed by reference to events
+          this.#pendingStartElement.attributes = [];
+          this.#pendingStartElement.line = token.position.line;
+          this.#pendingStartElement.column = token.position.column;
+          this.#pendingStartElement.offset = token.position.offset;
+          this.#hasPendingElement = true;
           break;
         }
 
         case "attribute": {
-          if (this.#pendingStartElement) {
+          if (this.#hasPendingElement) {
             this.#pendingStartElement.attributes.push({
               name: this.#parseName(token.name),
               value: normalizeAttributeValue(token.value),
@@ -156,7 +160,7 @@ export class XmlEventParser {
         }
 
         case "start_tag_close": {
-          if (this.#pendingStartElement) {
+          if (this.#hasPendingElement) {
             const name = this.#parseName(this.#pendingStartElement.name);
             const { line, column, offset } = this.#pendingStartElement;
 
@@ -191,7 +195,7 @@ export class XmlEventParser {
               });
             }
 
-            this.#pendingStartElement = null;
+            this.#hasPendingElement = false;
           }
           break;
         }
