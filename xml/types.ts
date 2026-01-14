@@ -115,7 +115,7 @@ export interface XmlName {
  * import type { XmlAttribute } from "@std/xml/types";
  *
  * const attr: XmlAttribute = {
- *   name: { local: "id" },
+ *   name: { raw: "id", local: "id" },
  *   value: "123",
  * };
  * ```

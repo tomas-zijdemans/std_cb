@@ -28,7 +28,7 @@ export type { StringifyOptions } from "./types.ts";
  *
  * const element = {
  *   type: "element" as const,
- *   name: { local: "greeting" },
+ *   name: { raw: "greeting", local: "greeting" },
  *   attributes: {},
  *   children: [{ type: "text" as const, text: "Hello!" }],
  * };
@@ -51,7 +51,7 @@ export type { StringifyOptions } from "./types.ts";
  *   },
  *   root: {
  *     type: "element" as const,
- *     name: { local: "root" },
+ *     name: { raw: "root", local: "root" },
  *     attributes: {},
  *     children: [],
  *   },
@@ -68,12 +68,12 @@ export type { StringifyOptions } from "./types.ts";
  * const doc = {
  *   root: {
  *     type: "element" as const,
- *     name: { local: "root" },
+ *     name: { raw: "root", local: "root" },
  *     attributes: {},
  *     children: [
  *       {
  *         type: "element" as const,
- *         name: { local: "child" },
+ *         name: { raw: "child", local: "child" },
  *         attributes: {},
  *         children: [],
  *       },
