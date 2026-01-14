@@ -441,9 +441,14 @@ export class XmlTokenizer {
       this.#normalizeLineEndings(chunk);
     this.#bufferIndex = 0;
 
-    while (this.#bufferIndex < this.#buffer.length) {
+    // Cache hot variables locally to reduce private field access overhead.
+    // Private field access (#) can be slower than local variable access.
+    const buffer = this.#buffer;
+    const bufferLen = buffer.length;
+
+    while (this.#bufferIndex < bufferLen) {
       // Use charCodeAt for faster character comparison in hot path
-      const code = this.#buffer.charCodeAt(this.#bufferIndex);
+      const code = buffer.charCodeAt(this.#bufferIndex);
 
       // Switch cases ordered by frequency for better branch prediction.
       switch (this.#state) {
@@ -714,7 +719,7 @@ export class XmlTokenizer {
         case State.COMMENT: {
           if (code === CC_DASH) {
             // Save content up to this point
-            this.#commentPartial += this.#buffer.slice(
+            this.#commentPartial += buffer.slice(
               this.#commentStartIdx,
               this.#bufferIndex,
             );
@@ -729,7 +734,7 @@ export class XmlTokenizer {
 
         case State.CDATA: {
           if (code === CC_RBRACKET) {
-            this.#cdataPartial += this.#buffer.slice(
+            this.#cdataPartial += buffer.slice(
               this.#cdataStartIdx,
               this.#bufferIndex,
             );
@@ -745,7 +750,7 @@ export class XmlTokenizer {
         case State.PI_CONTENT: {
           if (code === CC_QUESTION) {
             // Save content up to current position
-            this.#piContentPartial += this.#buffer.slice(
+            this.#piContentPartial += buffer.slice(
               this.#piContentStartIdx,
               this.#bufferIndex,
             );
@@ -1069,13 +1074,13 @@ export class XmlTokenizer {
             // Note: DOCTYPE quoted strings must be in a single chunk.
             // Cross-chunk handling is not supported for this edge case.
             while (
-              this.#bufferIndex < this.#buffer.length &&
-              this.#buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
+              this.#bufferIndex < bufferLen &&
+              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
             ) {
-              this.#doctypePublicId += this.#buffer[this.#bufferIndex];
-              this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+              this.#doctypePublicId += buffer[this.#bufferIndex];
+              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             }
-            this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             this.#state = State.DOCTYPE_AFTER_PUBLIC_ID;
           } else {
             this.#error(`Expected quote to start public ID`);
@@ -1092,13 +1097,13 @@ export class XmlTokenizer {
             this.#advanceWithCode(code);
             // Note: DOCTYPE quoted strings must be in a single chunk.
             while (
-              this.#bufferIndex < this.#buffer.length &&
-              this.#buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
+              this.#bufferIndex < bufferLen &&
+              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
             ) {
-              this.#doctypeSystemId += this.#buffer[this.#bufferIndex];
-              this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+              this.#doctypeSystemId += buffer[this.#bufferIndex];
+              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             }
-            this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             this.#state = State.DOCTYPE_AFTER_NAME;
           } else if (code === CC_GT) {
             this.#emit({
@@ -1135,13 +1140,13 @@ export class XmlTokenizer {
             this.#advanceWithCode(code);
             // Note: DOCTYPE quoted strings must be in a single chunk.
             while (
-              this.#bufferIndex < this.#buffer.length &&
-              this.#buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
+              this.#bufferIndex < bufferLen &&
+              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
             ) {
-              this.#doctypeSystemId += this.#buffer[this.#bufferIndex];
-              this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+              this.#doctypeSystemId += buffer[this.#bufferIndex];
+              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             }
-            this.#advanceWithCode(this.#buffer.charCodeAt(this.#bufferIndex));
+            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             this.#state = State.DOCTYPE_AFTER_NAME;
           } else {
             this.#error(`Expected quote to start system ID`);
