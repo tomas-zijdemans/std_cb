@@ -445,7 +445,10 @@ export class XmlTokenizer {
       // Use charCodeAt for faster character comparison in hot path
       const code = this.#buffer.charCodeAt(this.#bufferIndex);
 
+      // Switch cases ordered by frequency for better branch prediction.
       switch (this.#state) {
+        // === HOT PATH: Most frequently hit states ===
+
         case State.INITIAL: {
           if (code === CC_LT) {
             this.#flushText();
@@ -460,33 +463,6 @@ export class XmlTokenizer {
               this.#textStartIdx = this.#bufferIndex;
             }
             this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.TAG_OPEN: {
-          if (code === CC_SLASH) {
-            this.#advanceWithCode(code);
-            this.#tagNameStartIdx = this.#bufferIndex;
-            this.#tagNamePartial = "";
-            this.#state = State.END_TAG_NAME;
-          } else if (code === CC_BANG) {
-            this.#advanceWithCode(code);
-            this.#state = State.MARKUP_DECLARATION;
-          } else if (code === CC_QUESTION) {
-            this.#advanceWithCode(code);
-            this.#piTargetStartIdx = this.#bufferIndex;
-            this.#piTargetPartial = "";
-            this.#state = State.PI_TARGET;
-          } else if (this.#isNameStartCharCode(code)) {
-            this.#tagNameStartIdx = this.#bufferIndex;
-            this.#tagNamePartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.TAG_NAME;
-          } else {
-            this.#error(
-              `Unexpected character '${String.fromCharCode(code)}' after '<'`,
-            );
           }
           break;
         }
@@ -523,6 +499,54 @@ export class XmlTokenizer {
             this.#error(
               `Unexpected character '${String.fromCharCode(code)}' in tag name`,
             );
+          }
+          break;
+        }
+
+        case State.END_TAG_NAME: {
+          if (
+            this.#tagNameStartIdx === this.#bufferIndex &&
+            this.#tagNamePartial === "" &&
+            this.#isNameStartCharCode(code)
+          ) {
+            this.#advanceWithCode(code);
+          } else if (this.#isNameCharCode(code)) {
+            this.#advanceWithCode(code);
+          } else if (this.#isWhitespaceCode(code)) {
+            const name = this.#getTagName();
+            this.#tagNamePartial = name; // Store temporarily
+            this.#advanceWithCode(code);
+            this.#state = State.AFTER_END_TAG_NAME;
+          } else if (code === CC_GT) {
+            this.#emit({
+              type: "end_tag",
+              name: this.#getTagName(),
+              position: this.#getTokenPosition(),
+            });
+            this.#advanceWithCode(code);
+            this.#state = State.INITIAL;
+          } else {
+            this.#error(
+              `Unexpected character '${String.fromCharCode(code)}' in end tag`,
+            );
+          }
+          break;
+        }
+
+        case State.ATTRIBUTE_VALUE_DOUBLE: {
+          if (code === CC_DQUOTE) {
+            this.#emit({
+              type: "attribute",
+              name: this.#attrNamePartial,
+              value: this.#getAttrValue(),
+            });
+            this.#attrNamePartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.AFTER_TAG_NAME;
+          } else if (code === CC_LT) {
+            this.#error(`'<' not allowed in attribute value`);
+          } else {
+            this.#advanceWithCode(code);
           }
           break;
         }
@@ -576,17 +600,34 @@ export class XmlTokenizer {
           break;
         }
 
-        case State.AFTER_ATTRIBUTE_NAME: {
-          if (this.#isWhitespaceCode(code)) {
+        case State.TAG_OPEN: {
+          if (code === CC_SLASH) {
             this.#advanceWithCode(code);
-          } else if (code === CC_EQ) {
+            this.#tagNameStartIdx = this.#bufferIndex;
+            this.#tagNamePartial = "";
+            this.#state = State.END_TAG_NAME;
+          } else if (code === CC_BANG) {
             this.#advanceWithCode(code);
-            this.#state = State.BEFORE_ATTRIBUTE_VALUE;
+            this.#state = State.MARKUP_DECLARATION;
+          } else if (code === CC_QUESTION) {
+            this.#advanceWithCode(code);
+            this.#piTargetStartIdx = this.#bufferIndex;
+            this.#piTargetPartial = "";
+            this.#state = State.PI_TARGET;
+          } else if (this.#isNameStartCharCode(code)) {
+            this.#tagNameStartIdx = this.#bufferIndex;
+            this.#tagNamePartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.TAG_NAME;
           } else {
-            this.#error(`Expected '=' after attribute name`);
+            this.#error(
+              `Unexpected character '${String.fromCharCode(code)}' after '<'`,
+            );
           }
           break;
         }
+
+        // === WARM PATH: Moderately common states ===
 
         case State.BEFORE_ATTRIBUTE_VALUE: {
           if (this.#isWhitespaceCode(code)) {
@@ -607,68 +648,25 @@ export class XmlTokenizer {
           break;
         }
 
-        case State.ATTRIBUTE_VALUE_DOUBLE: {
-          if (code === CC_DQUOTE) {
-            this.#emit({
-              type: "attribute",
-              name: this.#attrNamePartial,
-              value: this.#getAttrValue(),
-            });
-            this.#attrNamePartial = "";
+        case State.AFTER_ATTRIBUTE_NAME: {
+          if (this.#isWhitespaceCode(code)) {
             this.#advanceWithCode(code);
-            this.#state = State.AFTER_TAG_NAME;
-          } else if (code === CC_LT) {
-            this.#error(`'<' not allowed in attribute value`);
+          } else if (code === CC_EQ) {
+            this.#advanceWithCode(code);
+            this.#state = State.BEFORE_ATTRIBUTE_VALUE;
           } else {
-            this.#advanceWithCode(code);
+            this.#error(`Expected '=' after attribute name`);
           }
           break;
         }
 
-        case State.ATTRIBUTE_VALUE_SINGLE: {
-          if (code === CC_SQUOTE) {
-            this.#emit({
-              type: "attribute",
-              name: this.#attrNamePartial,
-              value: this.#getAttrValue(),
-            });
-            this.#attrNamePartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.AFTER_TAG_NAME;
-          } else if (code === CC_LT) {
-            this.#error(`'<' not allowed in attribute value`);
-          } else {
-            this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.END_TAG_NAME: {
-          if (
-            this.#tagNameStartIdx === this.#bufferIndex &&
-            this.#tagNamePartial === "" &&
-            this.#isNameStartCharCode(code)
-          ) {
-            this.#advanceWithCode(code);
-          } else if (this.#isNameCharCode(code)) {
-            this.#advanceWithCode(code);
-          } else if (this.#isWhitespaceCode(code)) {
-            const name = this.#getTagName();
-            this.#tagNamePartial = name; // Store temporarily
-            this.#advanceWithCode(code);
-            this.#state = State.AFTER_END_TAG_NAME;
-          } else if (code === CC_GT) {
-            this.#emit({
-              type: "end_tag",
-              name: this.#getTagName(),
-              position: this.#getTokenPosition(),
-            });
+        case State.EXPECT_SELF_CLOSE_GT: {
+          if (code === CC_GT) {
+            this.#emit({ type: "start_tag_close", selfClosing: true });
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else {
-            this.#error(
-              `Unexpected character '${String.fromCharCode(code)}' in end tag`,
-            );
+            this.#error(`Expected '>' after '/' in self-closing tag`);
           }
           break;
         }
@@ -693,13 +691,69 @@ export class XmlTokenizer {
           break;
         }
 
-        case State.EXPECT_SELF_CLOSE_GT: {
-          if (code === CC_GT) {
-            this.#emit({ type: "start_tag_close", selfClosing: true });
+        case State.ATTRIBUTE_VALUE_SINGLE: {
+          if (code === CC_SQUOTE) {
+            this.#emit({
+              type: "attribute",
+              name: this.#attrNamePartial,
+              value: this.#getAttrValue(),
+            });
+            this.#attrNamePartial = "";
             this.#advanceWithCode(code);
-            this.#state = State.INITIAL;
+            this.#state = State.AFTER_TAG_NAME;
+          } else if (code === CC_LT) {
+            this.#error(`'<' not allowed in attribute value`);
           } else {
-            this.#error(`Expected '>' after '/' in self-closing tag`);
+            this.#advanceWithCode(code);
+          }
+          break;
+        }
+
+        // === COLD PATH: Rarely hit states (comments, CDATA, PI, DOCTYPE) ===
+
+        case State.COMMENT: {
+          if (code === CC_DASH) {
+            // Save content up to this point
+            this.#commentPartial += this.#buffer.slice(
+              this.#commentStartIdx,
+              this.#bufferIndex,
+            );
+            this.#advanceWithCode(code);
+            this.#commentStartIdx = this.#bufferIndex;
+            this.#state = State.COMMENT_DASH;
+          } else {
+            this.#advanceWithCode(code);
+          }
+          break;
+        }
+
+        case State.CDATA: {
+          if (code === CC_RBRACKET) {
+            this.#cdataPartial += this.#buffer.slice(
+              this.#cdataStartIdx,
+              this.#bufferIndex,
+            );
+            this.#advanceWithCode(code);
+            this.#cdataStartIdx = this.#bufferIndex;
+            this.#state = State.CDATA_BRACKET;
+          } else {
+            this.#advanceWithCode(code);
+          }
+          break;
+        }
+
+        case State.PI_CONTENT: {
+          if (code === CC_QUESTION) {
+            // Save content up to current position
+            this.#piContentPartial += this.#buffer.slice(
+              this.#piContentStartIdx,
+              this.#bufferIndex,
+            );
+            this.#piContentStartIdx = -1;
+            this.#advanceWithCode(code);
+            this.#state = State.PI_QUESTION;
+          } else {
+            this.#advanceWithCode(code);
           }
           break;
         }
@@ -721,6 +775,195 @@ export class XmlTokenizer {
           }
           break;
         }
+
+        case State.COMMENT_START: {
+          if (code === CC_DASH) {
+            this.#advanceWithCode(code);
+            this.#commentStartIdx = this.#bufferIndex;
+            this.#commentPartial = "";
+            this.#state = State.COMMENT;
+          } else {
+            this.#error(`Expected '-' to start comment`);
+          }
+          break;
+        }
+
+        case State.COMMENT_DASH: {
+          if (code === CC_DASH) {
+            this.#advanceWithCode(code);
+            // Mark that we've consumed the --, no more content to capture
+            this.#commentStartIdx = -1;
+            this.#state = State.COMMENT_DASH_DASH;
+          } else {
+            this.#commentPartial += "-";
+            this.#commentStartIdx = this.#bufferIndex;
+            this.#advanceWithCode(code);
+            this.#state = State.COMMENT;
+          }
+          break;
+        }
+
+        case State.COMMENT_DASH_DASH: {
+          if (code === CC_GT) {
+            this.#emit({
+              type: "comment",
+              content: this.#commentPartial,
+              position: this.#getTokenPosition(),
+            });
+            this.#commentStartIdx = -1;
+            this.#commentPartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.INITIAL;
+          } else if (code === CC_DASH) {
+            // Add one - to content, stay in COMMENT_DASH_DASH
+            this.#commentPartial += "-";
+            this.#advanceWithCode(code);
+          } else {
+            // Spec violation: -- inside comment. Be lenient.
+            this.#commentPartial += "--";
+            // Restart capturing from current position
+            this.#commentStartIdx = this.#bufferIndex;
+            this.#advanceWithCode(code);
+            this.#state = State.COMMENT;
+          }
+          break;
+        }
+
+        case State.CDATA_START: {
+          this.#cdataCheck += String.fromCharCode(code);
+          this.#advanceWithCode(code);
+          if (this.#cdataCheck === "CDATA[") {
+            this.#cdataStartIdx = this.#bufferIndex;
+            this.#cdataPartial = "";
+            this.#state = State.CDATA;
+          } else if (!"CDATA[".startsWith(this.#cdataCheck)) {
+            this.#error(`Expected 'CDATA[' after '<![`);
+          }
+          break;
+        }
+
+        case State.CDATA_BRACKET: {
+          if (code === CC_RBRACKET) {
+            this.#advanceWithCode(code);
+            this.#cdataStartIdx = this.#bufferIndex;
+            this.#state = State.CDATA_BRACKET_BRACKET;
+          } else {
+            this.#cdataPartial += "]";
+            this.#advanceWithCode(code);
+            this.#state = State.CDATA;
+          }
+          break;
+        }
+
+        case State.CDATA_BRACKET_BRACKET: {
+          if (code === CC_GT) {
+            this.#emit({
+              type: "cdata",
+              content: this.#cdataPartial,
+              position: this.#getTokenPosition(),
+            });
+            this.#cdataStartIdx = -1;
+            this.#cdataPartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.INITIAL;
+          } else if (code === CC_RBRACKET) {
+            this.#cdataPartial += "]";
+            this.#advanceWithCode(code);
+            this.#cdataStartIdx = this.#bufferIndex;
+          } else {
+            this.#cdataPartial += "]]";
+            this.#advanceWithCode(code);
+            this.#state = State.CDATA;
+          }
+          break;
+        }
+
+        case State.PI_TARGET: {
+          if (this.#isNameCharCode(code)) {
+            this.#advanceWithCode(code);
+          } else if (this.#isWhitespaceCode(code)) {
+            // Save target
+            const target = this.#getPiTarget();
+            this.#piTargetPartial = target; // Store temporarily
+            this.#advanceWithCode(code);
+            this.#piContentStartIdx = this.#bufferIndex;
+            this.#piContentPartial = "";
+            this.#state = State.PI_CONTENT;
+          } else if (code === CC_QUESTION) {
+            const target = this.#getPiTarget();
+            this.#piTargetPartial = target; // Store temporarily
+            this.#advanceWithCode(code);
+            this.#state = State.PI_TARGET_QUESTION;
+          } else {
+            this.#error(
+              `Unexpected character '${
+                String.fromCharCode(code)
+              }' in processing instruction target`,
+            );
+          }
+          break;
+        }
+
+        case State.PI_TARGET_QUESTION: {
+          if (code === CC_GT) {
+            if (this.#piTargetPartial.toLowerCase() === "xml") {
+              this.#emit(this.#createDeclaration("", this.#getTokenPosition()));
+            } else {
+              this.#emit({
+                type: "processing_instruction",
+                target: this.#piTargetPartial,
+                content: "",
+                position: this.#getTokenPosition(),
+              });
+            }
+            this.#piTargetPartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.INITIAL;
+          } else {
+            this.#error(
+              `Expected '>' after '?' in processing instruction, got '${
+                String.fromCharCode(code)
+              }'`,
+            );
+          }
+          break;
+        }
+
+        case State.PI_QUESTION: {
+          if (code === CC_GT) {
+            if (this.#piTargetPartial.toLowerCase() === "xml") {
+              this.#emit(
+                this.#createDeclaration(
+                  this.#piContentPartial,
+                  this.#getTokenPosition(),
+                ),
+              );
+            } else {
+              this.#emit({
+                type: "processing_instruction",
+                target: this.#piTargetPartial,
+                content: this.#piContentPartial.trim(),
+                position: this.#getTokenPosition(),
+              });
+            }
+            this.#piTargetPartial = "";
+            this.#piContentPartial = "";
+            this.#advanceWithCode(code);
+            this.#state = State.INITIAL;
+          } else if (code === CC_QUESTION) {
+            this.#piContentPartial += "?";
+            this.#advanceWithCode(code);
+          } else {
+            this.#piContentPartial += "?";
+            // Restart capturing from current position
+            this.#piContentStartIdx = this.#bufferIndex;
+            this.#advanceWithCode(code);
+            this.#state = State.PI_CONTENT;
+          }
+          break;
+        }
+
+        // === COLDEST PATH: DOCTYPE states (very rare) ===
 
         case State.DOCTYPE_START: {
           this.#doctypeCheck += String.fromCharCode(code);
@@ -932,240 +1175,6 @@ export class XmlTokenizer {
             this.#state = State.DOCTYPE_INTERNAL_SUBSET;
           } else {
             this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.COMMENT_START: {
-          if (code === CC_DASH) {
-            this.#advanceWithCode(code);
-            this.#commentStartIdx = this.#bufferIndex;
-            this.#commentPartial = "";
-            this.#state = State.COMMENT;
-          } else {
-            this.#error(`Expected '-' to start comment`);
-          }
-          break;
-        }
-
-        case State.COMMENT: {
-          if (code === CC_DASH) {
-            // Save content up to this point
-            this.#commentPartial += this.#buffer.slice(
-              this.#commentStartIdx,
-              this.#bufferIndex,
-            );
-            this.#advanceWithCode(code);
-            this.#commentStartIdx = this.#bufferIndex;
-            this.#state = State.COMMENT_DASH;
-          } else {
-            this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.COMMENT_DASH: {
-          if (code === CC_DASH) {
-            this.#advanceWithCode(code);
-            // Mark that we've consumed the --, no more content to capture
-            this.#commentStartIdx = -1;
-            this.#state = State.COMMENT_DASH_DASH;
-          } else {
-            this.#commentPartial += "-";
-            this.#commentStartIdx = this.#bufferIndex;
-            this.#advanceWithCode(code);
-            this.#state = State.COMMENT;
-          }
-          break;
-        }
-
-        case State.COMMENT_DASH_DASH: {
-          if (code === CC_GT) {
-            this.#emit({
-              type: "comment",
-              content: this.#commentPartial,
-              position: this.#getTokenPosition(),
-            });
-            this.#commentStartIdx = -1;
-            this.#commentPartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.INITIAL;
-          } else if (code === CC_DASH) {
-            // Add one - to content, stay in COMMENT_DASH_DASH
-            this.#commentPartial += "-";
-            this.#advanceWithCode(code);
-          } else {
-            // Spec violation: -- inside comment. Be lenient.
-            this.#commentPartial += "--";
-            // Restart capturing from current position
-            this.#commentStartIdx = this.#bufferIndex;
-            this.#advanceWithCode(code);
-            this.#state = State.COMMENT;
-          }
-          break;
-        }
-
-        case State.CDATA_START: {
-          this.#cdataCheck += String.fromCharCode(code);
-          this.#advanceWithCode(code);
-          if (this.#cdataCheck === "CDATA[") {
-            this.#cdataStartIdx = this.#bufferIndex;
-            this.#cdataPartial = "";
-            this.#state = State.CDATA;
-          } else if (!"CDATA[".startsWith(this.#cdataCheck)) {
-            this.#error(`Expected 'CDATA[' after '<![`);
-          }
-          break;
-        }
-
-        case State.CDATA: {
-          if (code === CC_RBRACKET) {
-            this.#cdataPartial += this.#buffer.slice(
-              this.#cdataStartIdx,
-              this.#bufferIndex,
-            );
-            this.#advanceWithCode(code);
-            this.#cdataStartIdx = this.#bufferIndex;
-            this.#state = State.CDATA_BRACKET;
-          } else {
-            this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.CDATA_BRACKET: {
-          if (code === CC_RBRACKET) {
-            this.#advanceWithCode(code);
-            this.#cdataStartIdx = this.#bufferIndex;
-            this.#state = State.CDATA_BRACKET_BRACKET;
-          } else {
-            this.#cdataPartial += "]";
-            this.#advanceWithCode(code);
-            this.#state = State.CDATA;
-          }
-          break;
-        }
-
-        case State.CDATA_BRACKET_BRACKET: {
-          if (code === CC_GT) {
-            this.#emit({
-              type: "cdata",
-              content: this.#cdataPartial,
-              position: this.#getTokenPosition(),
-            });
-            this.#cdataStartIdx = -1;
-            this.#cdataPartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.INITIAL;
-          } else if (code === CC_RBRACKET) {
-            this.#cdataPartial += "]";
-            this.#advanceWithCode(code);
-            this.#cdataStartIdx = this.#bufferIndex;
-          } else {
-            this.#cdataPartial += "]]";
-            this.#advanceWithCode(code);
-            this.#state = State.CDATA;
-          }
-          break;
-        }
-
-        case State.PI_TARGET: {
-          if (this.#isNameCharCode(code)) {
-            this.#advanceWithCode(code);
-          } else if (this.#isWhitespaceCode(code)) {
-            // Save target
-            const target = this.#getPiTarget();
-            this.#piTargetPartial = target; // Store temporarily
-            this.#advanceWithCode(code);
-            this.#piContentStartIdx = this.#bufferIndex;
-            this.#piContentPartial = "";
-            this.#state = State.PI_CONTENT;
-          } else if (code === CC_QUESTION) {
-            const target = this.#getPiTarget();
-            this.#piTargetPartial = target; // Store temporarily
-            this.#advanceWithCode(code);
-            this.#state = State.PI_TARGET_QUESTION;
-          } else {
-            this.#error(
-              `Unexpected character '${
-                String.fromCharCode(code)
-              }' in processing instruction target`,
-            );
-          }
-          break;
-        }
-
-        case State.PI_TARGET_QUESTION: {
-          if (code === CC_GT) {
-            if (this.#piTargetPartial.toLowerCase() === "xml") {
-              this.#emit(this.#createDeclaration("", this.#getTokenPosition()));
-            } else {
-              this.#emit({
-                type: "processing_instruction",
-                target: this.#piTargetPartial,
-                content: "",
-                position: this.#getTokenPosition(),
-              });
-            }
-            this.#piTargetPartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.INITIAL;
-          } else {
-            this.#error(
-              `Expected '>' after '?' in processing instruction, got '${
-                String.fromCharCode(code)
-              }'`,
-            );
-          }
-          break;
-        }
-
-        case State.PI_CONTENT: {
-          if (code === CC_QUESTION) {
-            // Save content up to current position
-            this.#piContentPartial += this.#buffer.slice(
-              this.#piContentStartIdx,
-              this.#bufferIndex,
-            );
-            this.#piContentStartIdx = -1;
-            this.#advanceWithCode(code);
-            this.#state = State.PI_QUESTION;
-          } else {
-            this.#advanceWithCode(code);
-          }
-          break;
-        }
-
-        case State.PI_QUESTION: {
-          if (code === CC_GT) {
-            if (this.#piTargetPartial.toLowerCase() === "xml") {
-              this.#emit(
-                this.#createDeclaration(
-                  this.#piContentPartial,
-                  this.#getTokenPosition(),
-                ),
-              );
-            } else {
-              this.#emit({
-                type: "processing_instruction",
-                target: this.#piTargetPartial,
-                content: this.#piContentPartial.trim(),
-                position: this.#getTokenPosition(),
-              });
-            }
-            this.#piTargetPartial = "";
-            this.#piContentPartial = "";
-            this.#advanceWithCode(code);
-            this.#state = State.INITIAL;
-          } else if (code === CC_QUESTION) {
-            this.#piContentPartial += "?";
-            this.#advanceWithCode(code);
-          } else {
-            this.#piContentPartial += "?";
-            // Restart capturing from current position
-            this.#piContentStartIdx = this.#bufferIndex;
-            this.#advanceWithCode(code);
-            this.#state = State.PI_CONTENT;
           }
           break;
         }
