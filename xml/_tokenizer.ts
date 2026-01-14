@@ -566,6 +566,122 @@ export class XmlTokenizer {
   }
 
   /**
+   * Capture comment content using indexOf for batch scanning.
+   * Returns true if complete comment found and emitted, false otherwise.
+   *
+   * Uses indexOf("-->") to find the terminator. Handles edge cases like
+   * multiple dashes (---) by letting char-by-char states handle them.
+   */
+  #captureComment(buffer: string, bufferLen: number): boolean {
+    const endIdx = buffer.indexOf("-->", this.#bufferIndex);
+
+    if (endIdx !== -1) {
+      // Fast path: found complete "-->" terminator
+      const content = this.#commentPartial +
+        buffer.slice(this.#commentStartIdx, endIdx);
+
+      // Update position for the content region + terminator
+      this.#updatePositionForRegion(buffer, this.#bufferIndex, endIdx + 3);
+      this.#bufferIndex = endIdx + 3;
+
+      this.#emit({
+        type: "comment",
+        content,
+        position: this.#getTokenPosition(),
+      });
+
+      this.#commentStartIdx = -1;
+      this.#commentPartial = "";
+      this.#state = State.INITIAL;
+      return true; // Complete
+    }
+
+    // No "-->" found - consume as much as safely possible
+    // We must NOT consume trailing `-` or `--` as they might be part of the terminator
+    let safeEnd = bufferLen;
+    if (
+      safeEnd > this.#bufferIndex &&
+      buffer.charCodeAt(safeEnd - 1) === CC_DASH
+    ) {
+      safeEnd--;
+      if (
+        safeEnd > this.#bufferIndex &&
+        buffer.charCodeAt(safeEnd - 1) === CC_DASH
+      ) {
+        safeEnd--;
+      }
+    }
+
+    // Batch consume the safe region
+    if (safeEnd > this.#bufferIndex) {
+      this.#commentPartial += buffer.slice(this.#commentStartIdx, safeEnd);
+      this.#updatePositionForRegion(buffer, this.#bufferIndex, safeEnd);
+      this.#bufferIndex = safeEnd;
+      this.#commentStartIdx = safeEnd;
+    }
+
+    return false; // Let char-by-char handle remaining characters
+  }
+
+  /**
+   * Capture PI content using indexOf for batch scanning.
+   * Returns true if complete PI found and emitted, false otherwise.
+   *
+   * Uses indexOf("?>") to find the terminator.
+   */
+  #capturePI(buffer: string, bufferLen: number): boolean {
+    const endIdx = buffer.indexOf("?>", this.#bufferIndex);
+
+    if (endIdx !== -1) {
+      // Fast path: found complete "?>" terminator
+      const content = this.#piContentPartial +
+        buffer.slice(this.#piContentStartIdx, endIdx);
+
+      // Update position for the content region + terminator
+      this.#updatePositionForRegion(buffer, this.#bufferIndex, endIdx + 2);
+      this.#bufferIndex = endIdx + 2;
+
+      // Emit the appropriate token type
+      if (this.#piTargetPartial.toLowerCase() === "xml") {
+        this.#emit(this.#createDeclaration(content, this.#getTokenPosition()));
+      } else {
+        this.#emit({
+          type: "processing_instruction",
+          target: this.#piTargetPartial,
+          content: content.trim(),
+          position: this.#getTokenPosition(),
+        });
+      }
+
+      this.#piTargetPartial = "";
+      this.#piContentStartIdx = -1;
+      this.#piContentPartial = "";
+      this.#state = State.INITIAL;
+      return true; // Complete
+    }
+
+    // No "?>" found - consume as much as safely possible
+    // We must NOT consume trailing `?` as it might be part of the terminator
+    let safeEnd = bufferLen;
+    if (
+      safeEnd > this.#bufferIndex &&
+      buffer.charCodeAt(safeEnd - 1) === CC_QUESTION
+    ) {
+      safeEnd--;
+    }
+
+    // Batch consume the safe region
+    if (safeEnd > this.#bufferIndex) {
+      this.#piContentPartial += buffer.slice(this.#piContentStartIdx, safeEnd);
+      this.#updatePositionForRegion(buffer, this.#bufferIndex, safeEnd);
+      this.#bufferIndex = safeEnd;
+      this.#piContentStartIdx = safeEnd;
+    }
+
+    return false; // Let char-by-char handle remaining characters
+  }
+
+  /**
    * Capture CDATA content using indexOf for batch scanning.
    * Returns true if complete CDATA found and emitted, false otherwise.
    *
@@ -954,17 +1070,27 @@ export class XmlTokenizer {
         // === COLD PATH: Rarely hit states (comments, CDATA, PI, DOCTYPE) ===
 
         case State.COMMENT: {
-          if (code === CC_DASH) {
-            // Save content up to this point
+          // Try batch scanning first - handles most cases efficiently
+          if (this.#captureComment(buffer, bufferLen)) {
+            break; // Complete comment found and emitted
+          }
+          // Batch consumed what it could; handle remaining chars (0-2 dashes)
+          if (this.#bufferIndex >= bufferLen) {
+            break; // Buffer exhausted, need more data
+          }
+          // Re-read code since bufferIndex may have changed
+          const commentCode = buffer.charCodeAt(this.#bufferIndex);
+          // Fall through to char-by-char for trailing `-` characters
+          if (commentCode === CC_DASH) {
             this.#commentPartial += buffer.slice(
               this.#commentStartIdx,
               this.#bufferIndex,
             );
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(commentCode);
             this.#commentStartIdx = this.#bufferIndex;
             this.#state = State.COMMENT_DASH;
           } else {
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(commentCode);
           }
           break;
         }
@@ -996,17 +1122,27 @@ export class XmlTokenizer {
         }
 
         case State.PI_CONTENT: {
-          if (code === CC_QUESTION) {
-            // Save content up to current position
+          // Try batch scanning first - handles most cases efficiently
+          if (this.#capturePI(buffer, bufferLen)) {
+            break; // Complete PI found and emitted
+          }
+          // Batch consumed what it could; handle remaining chars (0-1 question mark)
+          if (this.#bufferIndex >= bufferLen) {
+            break; // Buffer exhausted, need more data
+          }
+          // Re-read code since bufferIndex may have changed
+          const piCode = buffer.charCodeAt(this.#bufferIndex);
+          // Fall through to char-by-char for trailing `?` character
+          if (piCode === CC_QUESTION) {
             this.#piContentPartial += buffer.slice(
               this.#piContentStartIdx,
               this.#bufferIndex,
             );
             this.#piContentStartIdx = -1;
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(piCode);
             this.#state = State.PI_QUESTION;
           } else {
-            this.#advanceWithCode(code);
+            this.#advanceWithCode(piCode);
           }
           break;
         }
