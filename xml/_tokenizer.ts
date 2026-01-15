@@ -22,11 +22,8 @@ import {
   VERSION_RE,
 } from "./_common.ts";
 
-/** Position information for tokens. Re-exported from types.ts for convenience. */
-export type TokenPosition = XmlPosition;
-
 /** Options for the XML tokenizer. */
-export interface XmlTokenizerOptions {
+interface XmlTokenizerOptions {
   /**
    * If true, track line/column positions for tokens and error messages.
    * Disabling position tracking improves performance by ~20%.
@@ -35,36 +32,6 @@ export interface XmlTokenizerOptions {
    */
   readonly trackPosition?: boolean;
 }
-
-/** Token types emitted by the tokenizer. */
-export type XmlToken =
-  | { type: "start_tag_open"; name: string; position: TokenPosition }
-  | { type: "attribute"; name: string; value: string }
-  | { type: "start_tag_close"; selfClosing: boolean }
-  | { type: "end_tag"; name: string; position: TokenPosition }
-  | { type: "text"; content: string; position: TokenPosition }
-  | { type: "cdata"; content: string; position: TokenPosition }
-  | { type: "comment"; content: string; position: TokenPosition }
-  | {
-    type: "processing_instruction";
-    target: string;
-    content: string;
-    position: TokenPosition;
-  }
-  | {
-    type: "declaration";
-    version: string;
-    encoding?: string;
-    standalone?: "yes" | "no";
-    position: TokenPosition;
-  }
-  | {
-    type: "doctype";
-    name: string;
-    publicId?: string;
-    systemId?: string;
-    position: TokenPosition;
-  };
 
 /** Tokenizer state machine states. */
 const State = {
@@ -183,7 +150,7 @@ const CC_S_UPPER = 83; // S
 // would be ~200+ characters. This trade-off is acceptable for a non-validating parser.
 
 /** Sentinel position used when position tracking is disabled. */
-const NO_POSITION: TokenPosition = { line: 0, column: 0, offset: 0 };
+const NO_POSITION: XmlPosition = { line: 0, column: 0, offset: 0 };
 
 /**
  * Stateful XML Tokenizer.
@@ -273,15 +240,6 @@ export class XmlTokenizer {
     this.#tokenLine = this.#line;
     this.#tokenColumn = this.#column;
     this.#tokenOffset = this.#offset;
-  }
-
-  #getTokenPosition(): TokenPosition {
-    if (!this.#trackPosition) return NO_POSITION;
-    return {
-      line: this.#tokenLine,
-      column: this.#tokenColumn,
-      offset: this.#tokenOffset,
-    };
   }
 
   #error(message: string): never {

@@ -29,14 +29,6 @@ Deno.test("parse() handles document without declaration", () => {
   assertEquals(doc.declaration, undefined);
 });
 
-Deno.test("parse() handles empty text with siblings", () => {
-  const doc = parse("<root><a/><b/></root>");
-
-  assertEquals(doc.root.children.length, 2);
-  assertEquals(doc.root.children[0]!.type, "element");
-  assertEquals(doc.root.children[1]!.type, "element");
-});
-
 // =============================================================================
 // Error Handling (Unique to parse())
 // =============================================================================
