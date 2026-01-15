@@ -421,6 +421,250 @@ export interface XmlDocument {
 }
 
 // ============================================================================
+// Callback Interfaces (for zero-allocation streaming)
+// ============================================================================
+
+/**
+ * Callbacks for tokenizer output - enables zero-allocation token emission.
+ *
+ * Instead of creating token objects, the tokenizer invokes these callbacks
+ * directly with primitive values. This eliminates ~10,000 object allocations
+ * per 1,000 elements in typical documents.
+ *
+ * @example Usage
+ * ```ts ignore
+ * const tokenizer = new XmlTokenizer();
+ * tokenizer.process("<root>text</root>", {
+ *   onStartTagOpen(name, line, column, offset) {
+ *     console.log(`Start tag: ${name}`);
+ *   },
+ *   onText(content, line, column, offset) {
+ *     console.log(`Text: ${content}`);
+ *   },
+ * });
+ * ```
+ */
+export interface XmlTokenCallbacks {
+  /**
+   * Called when a start tag opens (e.g., `<element`).
+   * Attributes and closing will follow.
+   */
+  onStartTagOpen?(
+    name: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for each attribute in a start tag. */
+  onAttribute?(name: string, value: string): void;
+
+  /** Called when a start tag closes (e.g., `>` or `/>`). */
+  onStartTagClose?(selfClosing: boolean): void;
+
+  /** Called when an end tag is encountered (e.g., `</element>`). */
+  onEndTag?(
+    name: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for text content between tags. */
+  onText?(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for CDATA sections. */
+  onCData?(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for XML comments. */
+  onComment?(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for processing instructions (e.g., `<?target content?>`). */
+  onProcessingInstruction?(
+    target: string,
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for XML declarations (e.g., `<?xml version="1.0"?>`). */
+  onDeclaration?(
+    version: string,
+    encoding: string | undefined,
+    standalone: "yes" | "no" | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for DOCTYPE declarations. */
+  onDoctype?(
+    name: string,
+    publicId: string | undefined,
+    systemId: string | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+}
+
+/**
+ * Reusable attribute accessor that avoids allocating XmlAttribute arrays.
+ *
+ * Instead of creating an array of attribute objects, attributes are accessed
+ * by index through this interface. The implementation reuses internal arrays
+ * across elements.
+ *
+ * @example Usage
+ * ```ts ignore
+ * function handleElement(name: string, attrs: XmlAttributeIterator) {
+ *   for (let i = 0; i < attrs.count; i++) {
+ *     console.log(`${attrs.getName(i)}="${attrs.getValue(i)}"`);
+ *   }
+ * }
+ * ```
+ */
+export interface XmlAttributeIterator {
+  /** The number of attributes. */
+  readonly count: number;
+
+  /** Get the raw attribute name at the given index. */
+  getName(index: number): string;
+
+  /** Get the decoded attribute value at the given index. */
+  getValue(index: number): string;
+
+  /**
+   * Get the colon index in the attribute name (-1 if no namespace prefix).
+   * This allows consumers to parse namespace prefixes without string allocation.
+   */
+  getColonIndex(index: number): number;
+}
+
+/**
+ * Callbacks for event-level output - enables zero-allocation event emission.
+ *
+ * The parser invokes these callbacks instead of creating XmlEvent objects.
+ * Combined with XmlTokenCallbacks, this eliminates all intermediate allocations
+ * in the parsing pipeline.
+ *
+ * @example Usage
+ * ```ts ignore
+ * await parseXmlStream(response.body, {
+ *   onStartElement(name, colonIndex, attrs, selfClosing, line, col, offset) {
+ *     const localName = colonIndex === -1 ? name : name.slice(colonIndex + 1);
+ *     console.log(`Element: ${localName}`);
+ *   },
+ *   onText(text, line, col, offset) {
+ *     console.log(`Text: ${text}`);
+ *   },
+ * });
+ * ```
+ */
+export interface XmlEventCallbacks {
+  /** Called for XML declarations. */
+  onDeclaration?(
+    version: string,
+    encoding: string | undefined,
+    standalone: "yes" | "no" | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for DOCTYPE declarations. */
+  onDoctype?(
+    name: string,
+    publicId: string | undefined,
+    systemId: string | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /**
+   * Called when an element starts.
+   *
+   * @param name The raw element name (e.g., "ns:element").
+   * @param colonIndex Index of ':' in name, or -1 if no prefix.
+   * @param attributes Reusable attribute accessor.
+   * @param selfClosing Whether this is a self-closing tag.
+   */
+  onStartElement?(
+    name: string,
+    colonIndex: number,
+    attributes: XmlAttributeIterator,
+    selfClosing: boolean,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /**
+   * Called when an element ends.
+   *
+   * @param name The raw element name.
+   * @param colonIndex Index of ':' in name, or -1 if no prefix.
+   */
+  onEndElement?(
+    name: string,
+    colonIndex: number,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for text content (entity-decoded). */
+  onText?(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for CDATA sections. */
+  onCData?(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for comments. */
+  onComment?(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+
+  /** Called for processing instructions. */
+  onProcessingInstruction?(
+    target: string,
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void;
+}
+
+// ============================================================================
 // Type Guards
 // ============================================================================
 

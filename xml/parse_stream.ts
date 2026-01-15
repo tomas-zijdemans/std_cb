@@ -7,11 +7,202 @@
  * @module
  */
 
-import type { ParseStreamOptions, XmlEvent } from "./types.ts";
+import type {
+  ParseStreamOptions,
+  XmlAttributeIterator,
+  XmlCDataEvent,
+  XmlCommentEvent,
+  XmlDeclarationEvent,
+  XmlEndElementEvent,
+  XmlEvent,
+  XmlEventCallbacks,
+  XmlName,
+  XmlProcessingInstructionEvent,
+  XmlStartElementEvent,
+  XmlTextEvent,
+} from "./types.ts";
 import { XmlTokenizer } from "./_tokenizer.ts";
 import { XmlEventParser } from "./_parser.ts";
 
 export type { ParseStreamOptions } from "./types.ts";
+
+/**
+ * Parses a qualified name string into an XmlName object.
+ */
+function parseName(raw: string, colonIndex: number): XmlName {
+  if (colonIndex === -1) {
+    return { raw, local: raw };
+  }
+  return {
+    raw,
+    local: raw.slice(colonIndex + 1),
+    prefix: raw.slice(0, colonIndex),
+  };
+}
+
+/**
+ * Event batcher that collects callback events into XmlEvent objects.
+ *
+ * This class implements XmlEventCallbacks and creates XmlEvent objects
+ * from the callback parameters, then batches them for streaming output.
+ *
+ * Note: This allocates XmlEvent objects to maintain compatibility with
+ * the XmlParseStream API. For zero-allocation streaming, use the callback
+ * APIs directly.
+ */
+class EventBatcher implements XmlEventCallbacks {
+  #events: XmlEvent[] = [];
+
+  /**
+   * Flush collected events and return them.
+   * The internal buffer is cleared after this call.
+   */
+  flush(): XmlEvent[] {
+    const events = this.#events;
+    this.#events = [];
+    return events;
+  }
+
+  onDeclaration(
+    version: string,
+    encoding: string | undefined,
+    standalone: "yes" | "no" | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push({
+      type: "declaration",
+      version,
+      line,
+      column,
+      offset,
+      ...(encoding !== undefined ? { encoding } : {}),
+      ...(standalone !== undefined ? { standalone } : {}),
+    } as XmlDeclarationEvent);
+  }
+
+  onStartElement(
+    name: string,
+    colonIndex: number,
+    attributes: XmlAttributeIterator,
+    selfClosing: boolean,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    // Build attributes array (allocates objects)
+    const attrs: Array<{ name: XmlName; value: string }> = [];
+    for (let i = 0; i < attributes.count; i++) {
+      const attrName = attributes.getName(i);
+      const attrColonIndex = attributes.getColonIndex(i);
+      attrs.push({
+        name: parseName(attrName, attrColonIndex),
+        value: attributes.getValue(i),
+      });
+    }
+
+    this.#events.push(
+      {
+        type: "start_element",
+        name: parseName(name, colonIndex),
+        attributes: attrs,
+        selfClosing,
+        line,
+        column,
+        offset,
+      } satisfies XmlStartElementEvent,
+    );
+  }
+
+  onEndElement(
+    name: string,
+    colonIndex: number,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push(
+      {
+        type: "end_element",
+        name: parseName(name, colonIndex),
+        line,
+        column,
+        offset,
+      } satisfies XmlEndElementEvent,
+    );
+  }
+
+  onText(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push(
+      {
+        type: "text",
+        text,
+        line,
+        column,
+        offset,
+      } satisfies XmlTextEvent,
+    );
+  }
+
+  onCData(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push(
+      {
+        type: "cdata",
+        text,
+        line,
+        column,
+        offset,
+      } satisfies XmlCDataEvent,
+    );
+  }
+
+  onComment(
+    text: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push(
+      {
+        type: "comment",
+        text,
+        line,
+        column,
+        offset,
+      } satisfies XmlCommentEvent,
+    );
+  }
+
+  onProcessingInstruction(
+    target: string,
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#events.push(
+      {
+        type: "processing_instruction",
+        target,
+        content,
+        line,
+        column,
+        offset,
+      } satisfies XmlProcessingInstructionEvent,
+    );
+  }
+}
 
 /**
  * A streaming XML parser that transforms XML text into a stream of event batches.
@@ -133,23 +324,24 @@ export class XmlParseStream extends TransformStream<string, XmlEvent[]> {
   constructor(options: ParseStreamOptions = {}) {
     const trackPosition = options.trackPosition ?? false;
     const tokenizer = new XmlTokenizer({ trackPosition });
-    const parser = new XmlEventParser(options);
+    const batcher = new EventBatcher();
+    const parser = new XmlEventParser(batcher, options);
 
     super({
       transform(
         chunk: string,
         controller: TransformStreamDefaultController<XmlEvent[]>,
       ) {
-        const tokens = tokenizer.process(chunk);
-        const events = parser.process(tokens);
+        tokenizer.process(chunk, parser);
+        const events = batcher.flush();
         if (events.length > 0) {
           controller.enqueue(events);
         }
       },
       flush(controller: TransformStreamDefaultController<XmlEvent[]>) {
-        const tokens = tokenizer.finalize();
-        const events = parser.process(tokens);
+        tokenizer.finalize(parser);
         parser.finalize();
+        const events = batcher.flush();
         if (events.length > 0) {
           controller.enqueue(events);
         }

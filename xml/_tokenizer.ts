@@ -10,7 +10,11 @@
  * @module
  */
 
-import { type XmlPosition, XmlSyntaxError } from "./types.ts";
+import {
+  type XmlPosition,
+  XmlSyntaxError,
+  type XmlTokenCallbacks,
+} from "./types.ts";
 import {
   ENCODING_RE,
   LINE_ENDING_RE,
@@ -252,7 +256,8 @@ export class XmlTokenizer {
   #textStartColumn = 1;
   #textStartOffset = 0;
 
-  #tokens: XmlToken[] = [];
+  /** Current callbacks for emission (set during process/finalize calls). */
+  #callbacks: XmlTokenCallbacks = {};
 
   /**
    * Constructs a new XmlTokenizer.
@@ -317,17 +322,12 @@ export class XmlTokenizer {
       this.#textStartIdx = -1;
       this.#textPartial = "";
       if (content.length > 0) {
-        this.#emit({
-          type: "text",
+        this.#callbacks.onText?.(
           content,
-          position: this.#trackPosition
-            ? {
-              line: this.#textStartLine,
-              column: this.#textStartColumn,
-              offset: this.#textStartOffset,
-            }
-            : NO_POSITION,
-        });
+          this.#textStartLine,
+          this.#textStartColumn,
+          this.#textStartOffset,
+        );
       }
     }
   }
@@ -464,11 +464,7 @@ export class XmlTokenizer {
     return chunk.includes("\r") ? chunk.replace(LINE_ENDING_RE, "\n") : chunk;
   }
 
-  #emit(token: XmlToken): void {
-    this.#tokens.push(token);
-  }
-
-  #createDeclaration(content: string, position: TokenPosition): XmlToken {
+  #emitDeclaration(content: string): void {
     const versionMatch = VERSION_RE.exec(content);
     const encodingMatch = ENCODING_RE.exec(content);
     const standaloneMatch = STANDALONE_RE.exec(content);
@@ -477,13 +473,14 @@ export class XmlTokenizer {
     const encoding = encodingMatch?.[1] ?? encodingMatch?.[2];
     const standalone = standaloneMatch?.[1] ?? standaloneMatch?.[2];
 
-    return {
-      type: "declaration",
+    this.#callbacks.onDeclaration?.(
       version,
-      ...(encoding && { encoding }),
-      ...(standalone && { standalone: standalone as "yes" | "no" }),
-      position,
-    };
+      encoding,
+      standalone as "yes" | "no" | undefined,
+      this.#tokenLine,
+      this.#tokenColumn,
+      this.#tokenOffset,
+    );
   }
 
   // ========================================================================
@@ -584,11 +581,12 @@ export class XmlTokenizer {
       this.#updatePositionForRegion(buffer, this.#bufferIndex, endIdx + 3);
       this.#bufferIndex = endIdx + 3;
 
-      this.#emit({
-        type: "comment",
+      this.#callbacks.onComment?.(
         content,
-        position: this.#getTokenPosition(),
-      });
+        this.#tokenLine,
+        this.#tokenColumn,
+        this.#tokenOffset,
+      );
 
       this.#commentStartIdx = -1;
       this.#commentPartial = "";
@@ -643,14 +641,15 @@ export class XmlTokenizer {
 
       // Emit the appropriate token type
       if (this.#piTargetPartial.toLowerCase() === "xml") {
-        this.#emit(this.#createDeclaration(content, this.#getTokenPosition()));
+        this.#emitDeclaration(content);
       } else {
-        this.#emit({
-          type: "processing_instruction",
-          target: this.#piTargetPartial,
-          content: content.trim(),
-          position: this.#getTokenPosition(),
-        });
+        this.#callbacks.onProcessingInstruction?.(
+          this.#piTargetPartial,
+          content.trim(),
+          this.#tokenLine,
+          this.#tokenColumn,
+          this.#tokenOffset,
+        );
       }
 
       this.#piTargetPartial = "";
@@ -704,11 +703,12 @@ export class XmlTokenizer {
       this.#updatePositionForRegion(buffer, this.#bufferIndex, endIdx + 3);
       this.#bufferIndex = endIdx + 3;
 
-      this.#emit({
-        type: "cdata",
+      this.#callbacks.onCData?.(
         content,
-        position: this.#getTokenPosition(),
-      });
+        this.#tokenLine,
+        this.#tokenColumn,
+        this.#tokenOffset,
+      );
 
       this.#cdataStartIdx = -1;
       this.#cdataPartial = "";
@@ -744,17 +744,17 @@ export class XmlTokenizer {
   }
 
   /**
-   * Process a chunk of XML text and return tokens.
+   * Process a chunk of XML text using callbacks.
    *
    * This method is synchronous and can be called multiple times with
-   * consecutive chunks of XML input. Tokens are returned as an array
-   * for optimal performance.
+   * consecutive chunks of XML input. Callbacks are invoked for each
+   * token, enabling zero-allocation streaming.
    *
    * @param chunk The XML text chunk to process.
-   * @returns Array of tokens extracted from this chunk.
+   * @param callbacks Callbacks to invoke for each token.
    */
-  process(chunk: string): XmlToken[] {
-    this.#tokens = [];
+  process(chunk: string, callbacks: XmlTokenCallbacks): void {
+    this.#callbacks = callbacks;
     this.#savePartialsBeforeReset();
     this.#buffer = this.#buffer.slice(this.#bufferIndex) +
       this.#normalizeLineEndings(chunk);
@@ -800,28 +800,31 @@ export class XmlTokenizer {
           // Get the terminating character
           const termCode = buffer.charCodeAt(this.#bufferIndex);
           if (this.#isWhitespaceCode(termCode)) {
-            this.#emit({
-              type: "start_tag_open",
-              name: this.#getTagName(),
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onStartTagOpen?.(
+              this.#getTagName(),
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(termCode);
             this.#state = State.AFTER_TAG_NAME;
           } else if (termCode === CC_GT) {
-            this.#emit({
-              type: "start_tag_open",
-              name: this.#getTagName(),
-              position: this.#getTokenPosition(),
-            });
-            this.#emit({ type: "start_tag_close", selfClosing: false });
+            this.#callbacks.onStartTagOpen?.(
+              this.#getTagName(),
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
+            this.#callbacks.onStartTagClose?.(false);
             this.#advanceWithCode(termCode);
             this.#state = State.INITIAL;
           } else if (termCode === CC_SLASH) {
-            this.#emit({
-              type: "start_tag_open",
-              name: this.#getTagName(),
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onStartTagOpen?.(
+              this.#getTagName(),
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(termCode);
             this.#state = State.EXPECT_SELF_CLOSE_GT;
           } else {
@@ -866,11 +869,12 @@ export class XmlTokenizer {
             this.#advanceWithCode(termCode);
             this.#state = State.AFTER_END_TAG_NAME;
           } else if (termCode === CC_GT) {
-            this.#emit({
-              type: "end_tag",
-              name: this.#getTagName(),
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onEndTag?.(
+              this.#getTagName(),
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(termCode);
             this.#state = State.INITIAL;
           } else {
@@ -885,11 +889,10 @@ export class XmlTokenizer {
 
         case State.ATTRIBUTE_VALUE_DOUBLE: {
           if (code === CC_DQUOTE) {
-            this.#emit({
-              type: "attribute",
-              name: this.#attrNamePartial,
-              value: this.#getAttrValue(),
-            });
+            this.#callbacks.onAttribute?.(
+              this.#attrNamePartial,
+              this.#getAttrValue(),
+            );
             this.#attrNamePartial = "";
             this.#advanceWithCode(code);
             this.#state = State.AFTER_TAG_NAME;
@@ -905,7 +908,7 @@ export class XmlTokenizer {
           if (this.#isWhitespaceCode(code)) {
             this.#advanceWithCode(code);
           } else if (code === CC_GT) {
-            this.#emit({ type: "start_tag_close", selfClosing: false });
+            this.#callbacks.onStartTagClose?.(false);
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else if (code === CC_SLASH) {
@@ -1020,7 +1023,7 @@ export class XmlTokenizer {
 
         case State.EXPECT_SELF_CLOSE_GT: {
           if (code === CC_GT) {
-            this.#emit({ type: "start_tag_close", selfClosing: true });
+            this.#callbacks.onStartTagClose?.(true);
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else {
@@ -1033,11 +1036,12 @@ export class XmlTokenizer {
           if (this.#isWhitespaceCode(code)) {
             this.#advanceWithCode(code);
           } else if (code === CC_GT) {
-            this.#emit({
-              type: "end_tag",
-              name: this.#tagNamePartial,
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onEndTag?.(
+              this.#tagNamePartial,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#tagNamePartial = "";
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
@@ -1051,11 +1055,10 @@ export class XmlTokenizer {
 
         case State.ATTRIBUTE_VALUE_SINGLE: {
           if (code === CC_SQUOTE) {
-            this.#emit({
-              type: "attribute",
-              name: this.#attrNamePartial,
-              value: this.#getAttrValue(),
-            });
+            this.#callbacks.onAttribute?.(
+              this.#attrNamePartial,
+              this.#getAttrValue(),
+            );
             this.#attrNamePartial = "";
             this.#advanceWithCode(code);
             this.#state = State.AFTER_TAG_NAME;
@@ -1194,11 +1197,12 @@ export class XmlTokenizer {
 
         case State.COMMENT_DASH_DASH: {
           if (code === CC_GT) {
-            this.#emit({
-              type: "comment",
-              content: this.#commentPartial,
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onComment?.(
+              this.#commentPartial,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#commentStartIdx = -1;
             this.#commentPartial = "";
             this.#advanceWithCode(code);
@@ -1246,11 +1250,12 @@ export class XmlTokenizer {
 
         case State.CDATA_BRACKET_BRACKET: {
           if (code === CC_GT) {
-            this.#emit({
-              type: "cdata",
-              content: this.#cdataPartial,
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onCData?.(
+              this.#cdataPartial,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#cdataStartIdx = -1;
             this.#cdataPartial = "";
             this.#advanceWithCode(code);
@@ -1296,14 +1301,15 @@ export class XmlTokenizer {
         case State.PI_TARGET_QUESTION: {
           if (code === CC_GT) {
             if (this.#piTargetPartial.toLowerCase() === "xml") {
-              this.#emit(this.#createDeclaration("", this.#getTokenPosition()));
+              this.#emitDeclaration("");
             } else {
-              this.#emit({
-                type: "processing_instruction",
-                target: this.#piTargetPartial,
-                content: "",
-                position: this.#getTokenPosition(),
-              });
+              this.#callbacks.onProcessingInstruction?.(
+                this.#piTargetPartial,
+                "",
+                this.#tokenLine,
+                this.#tokenColumn,
+                this.#tokenOffset,
+              );
             }
             this.#piTargetPartial = "";
             this.#advanceWithCode(code);
@@ -1321,19 +1327,15 @@ export class XmlTokenizer {
         case State.PI_QUESTION: {
           if (code === CC_GT) {
             if (this.#piTargetPartial.toLowerCase() === "xml") {
-              this.#emit(
-                this.#createDeclaration(
-                  this.#piContentPartial,
-                  this.#getTokenPosition(),
-                ),
-              );
+              this.#emitDeclaration(this.#piContentPartial);
             } else {
-              this.#emit({
-                type: "processing_instruction",
-                target: this.#piTargetPartial,
-                content: this.#piContentPartial.trim(),
-                position: this.#getTokenPosition(),
-              });
+              this.#callbacks.onProcessingInstruction?.(
+                this.#piTargetPartial,
+                this.#piContentPartial.trim(),
+                this.#tokenLine,
+                this.#tokenColumn,
+                this.#tokenOffset,
+              );
             }
             this.#piTargetPartial = "";
             this.#piContentPartial = "";
@@ -1377,11 +1379,14 @@ export class XmlTokenizer {
               this.#state = State.DOCTYPE_AFTER_NAME;
             }
           } else if (code === CC_GT) {
-            this.#emit({
-              type: "doctype",
-              name: this.#doctypeName,
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onDoctype?.(
+              this.#doctypeName,
+              undefined,
+              undefined,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else if (code === CC_LBRACKET) {
@@ -1408,13 +1413,14 @@ export class XmlTokenizer {
           if (this.#isWhitespaceCode(code)) {
             this.#advanceWithCode(code);
           } else if (code === CC_GT) {
-            this.#emit({
-              type: "doctype",
-              name: this.#doctypeName,
-              ...(this.#doctypePublicId && { publicId: this.#doctypePublicId }),
-              ...(this.#doctypeSystemId && { systemId: this.#doctypeSystemId }),
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onDoctype?.(
+              this.#doctypeName,
+              this.#doctypePublicId || undefined,
+              this.#doctypeSystemId || undefined,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else if (code === CC_LBRACKET) {
@@ -1490,12 +1496,14 @@ export class XmlTokenizer {
             this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
             this.#state = State.DOCTYPE_AFTER_NAME;
           } else if (code === CC_GT) {
-            this.#emit({
-              type: "doctype",
-              name: this.#doctypeName,
-              publicId: this.#doctypePublicId,
-              position: this.#getTokenPosition(),
-            });
+            this.#callbacks.onDoctype?.(
+              this.#doctypeName,
+              this.#doctypePublicId,
+              undefined,
+              this.#tokenLine,
+              this.#tokenColumn,
+              this.#tokenOffset,
+            );
             this.#advanceWithCode(code);
             this.#state = State.INITIAL;
           } else {
@@ -1569,22 +1577,20 @@ export class XmlTokenizer {
         }
       }
     }
-
-    return this.#tokens;
   }
 
   /**
-   * Finalize tokenization and return any remaining tokens.
+   * Finalize tokenization using callbacks.
    *
    * This method should be called after all chunks have been processed.
    * It flushes any pending text content and validates that the tokenizer
    * is in a valid end state.
    *
-   * @returns Array of remaining tokens (typically just text content).
+   * @param callbacks Callbacks to invoke for remaining tokens.
    * @throws {XmlSyntaxError} If the tokenizer is in an incomplete state.
    */
-  finalize(): XmlToken[] {
-    this.#tokens = [];
+  finalize(callbacks: XmlTokenCallbacks): void {
+    this.#callbacks = callbacks;
     this.#flushText();
 
     if (this.#state !== State.INITIAL) {
@@ -1592,8 +1598,6 @@ export class XmlTokenizer {
       const message = this.#getEndOfInputErrorMessage();
       this.#error(message);
     }
-
-    return this.#tokens;
   }
 
   #getEndOfInputErrorMessage(): string {

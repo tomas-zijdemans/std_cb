@@ -4,29 +4,23 @@
 /**
  * Internal XML parser module.
  *
- * Transforms raw tokens from the tokenizer into high-level XmlEvent objects,
+ * Transforms raw tokens from the tokenizer into high-level events,
  * handling namespace prefixes, entity decoding, and well-formedness validation.
+ *
+ * Uses a callback-based API for zero-allocation streaming.
  *
  * @module
  */
 
 import type {
   ParseStreamOptions,
-  XmlAttribute,
-  XmlCDataEvent,
-  XmlCommentEvent,
-  XmlDeclarationEvent,
-  XmlEndElementEvent,
-  XmlEvent,
-  XmlName,
-  XmlProcessingInstructionEvent,
-  XmlStartElementEvent,
-  XmlTextEvent,
+  XmlAttributeIterator,
+  XmlEventCallbacks,
+  XmlTokenCallbacks,
 } from "./types.ts";
 import { XmlSyntaxError } from "./types.ts";
-import type { XmlToken } from "./_tokenizer.ts";
 import { decodeEntities } from "./_entities.ts";
-import { createCachedNameParser, WHITESPACE_ONLY_RE } from "./_common.ts";
+import { WHITESPACE_ONLY_RE } from "./_common.ts";
 
 /**
  * Normalizes attribute value per XML 1.0 §3.3.3.
@@ -56,269 +50,291 @@ function normalizeAttributeValue(raw: string): string {
 }
 
 /**
+ * Reusable attribute iterator implementation.
+ *
+ * This class reuses internal arrays across elements to avoid allocations.
+ * The iterator is valid only until the next element is processed.
+ */
+class AttributeIteratorImpl implements XmlAttributeIterator {
+  #names: string[] = [];
+  #values: string[] = [];
+  #colonIndices: number[] = [];
+  #count = 0;
+
+  get count(): number {
+    return this.#count;
+  }
+
+  getName(index: number): string {
+    return this.#names[index]!;
+  }
+
+  getValue(index: number): string {
+    return this.#values[index]!;
+  }
+
+  getColonIndex(index: number): number {
+    return this.#colonIndices[index]!;
+  }
+
+  /** @internal Reset the iterator for a new element. */
+  _reset(): void {
+    this.#count = 0;
+  }
+
+  /** @internal Add an attribute (name already decoded, value raw). */
+  _add(name: string, value: string): void {
+    this.#names[this.#count] = name;
+    this.#values[this.#count] = normalizeAttributeValue(value);
+    this.#colonIndices[this.#count] = name.indexOf(":");
+    this.#count++;
+  }
+}
+
+/**
  * Stateful XML Event Parser.
  *
- * Transforms raw XML tokens into high-level events. Handles element stacking,
- * well-formedness validation, and optional filtering of whitespace/comments.
+ * Implements {@linkcode XmlTokenCallbacks} to receive tokens from the tokenizer,
+ * and emits events via {@linkcode XmlEventCallbacks}. This enables zero-allocation
+ * streaming from tokenizer through parser to consumer.
  *
  * @example Basic usage
  * ```ts ignore
- * const parser = new XmlEventParser({ ignoreWhitespace: true });
- * const events1 = parser.process(tokens1);
- * const events2 = parser.process(tokens2);
- * parser.finalize(); // throws if unclosed elements
+ * const parser = new XmlEventParser({
+ *   onStartElement(name, colonIndex, attrs, selfClosing, line, col, offset) {
+ *     console.log(`Element: ${name}`);
+ *   },
+ * });
+ *
+ * const tokenizer = new XmlTokenizer();
+ * tokenizer.process("<root><item/></root>", parser);
+ * tokenizer.finalize(parser);
+ * parser.finalize();
  * ```
  */
-export class XmlEventParser {
-  #elementStack: Array<
-    {
-      rawName: string;
-      parsedName: XmlName;
-      line: number;
-      column: number;
-      offset: number;
-    }
-  > = [];
-  /** Pre-allocated pending element - reused to avoid allocations per element. */
-  #pendingStartElement = {
-    name: "",
-    attributes: [] as XmlAttribute[],
-    line: 0,
-    column: 0,
-    offset: 0,
-  };
-  /** Whether #pendingStartElement contains valid data. */
-  #hasPendingElement = false;
+export class XmlEventParser implements XmlTokenCallbacks {
+  #callbacks: XmlEventCallbacks;
   #options: ParseStreamOptions;
-  /** Cached name parser - avoids repeated allocations for the same element/attribute names. */
-  #parseName = createCachedNameParser();
+
+  #elementStack: Array<{
+    rawName: string;
+    colonIndex: number;
+    line: number;
+    column: number;
+    offset: number;
+  }> = [];
+
+  /** Pending element state (reused across elements). */
+  #pendingName = "";
+  #pendingColonIndex = -1;
+  #pendingLine = 0;
+  #pendingColumn = 0;
+  #pendingOffset = 0;
+  #hasPendingElement = false;
+
+  /** Reusable attribute iterator. */
+  #attrIterator = new AttributeIteratorImpl();
 
   /**
    * Constructs a new XmlEventParser.
    *
+   * @param callbacks Callbacks to invoke for each event.
    * @param options Options for filtering and behavior.
    */
-  constructor(options: ParseStreamOptions = {}) {
+  constructor(callbacks: XmlEventCallbacks, options: ParseStreamOptions = {}) {
+    this.#callbacks = callbacks;
     this.#options = options;
   }
 
-  /**
-   * Process tokens synchronously and return events.
-   *
-   * @param tokens Array of tokens from the tokenizer.
-   * @returns Array of events extracted from the tokens.
-   */
-  process(tokens: XmlToken[]): XmlEvent[] {
-    const {
-      ignoreWhitespace = false,
-      ignoreComments = false,
-      ignoreProcessingInstructions = false,
-      coerceCDataToText = false,
-    } = this.#options;
+  // ==========================================================================
+  // XmlTokenCallbacks implementation
+  // ==========================================================================
 
-    const events: XmlEvent[] = [];
+  onStartTagOpen(
+    name: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#pendingName = name;
+    this.#pendingColonIndex = name.indexOf(":");
+    this.#pendingLine = line;
+    this.#pendingColumn = column;
+    this.#pendingOffset = offset;
+    this.#hasPendingElement = true;
+    this.#attrIterator._reset();
+  }
 
-    for (const token of tokens) {
-      switch (token.type) {
-        case "declaration": {
-          events.push(
-            {
-              type: "declaration",
-              version: token.version,
-              line: token.position.line,
-              column: token.position.column,
-              offset: token.position.offset,
-              ...(token.encoding !== undefined
-                ? { encoding: token.encoding }
-                : {}),
-              ...(token.standalone !== undefined
-                ? { standalone: token.standalone }
-                : {}),
-            } satisfies XmlDeclarationEvent,
-          );
-          break;
-        }
+  onAttribute(name: string, value: string): void {
+    if (this.#hasPendingElement) {
+      this.#attrIterator._add(name, value);
+    }
+  }
 
-        case "doctype": {
-          // DOCTYPE is parsed by tokenizer but not emitted as an event
-          break;
-        }
+  onStartTagClose(selfClosing: boolean): void {
+    if (this.#hasPendingElement) {
+      this.#callbacks.onStartElement?.(
+        this.#pendingName,
+        this.#pendingColonIndex,
+        this.#attrIterator,
+        selfClosing,
+        this.#pendingLine,
+        this.#pendingColumn,
+        this.#pendingOffset,
+      );
 
-        case "start_tag_open": {
-          // Reuse pre-allocated object instead of creating new one
-          this.#pendingStartElement.name = token.name;
-          // Note: Must create new array since it's passed by reference to events
-          this.#pendingStartElement.attributes = [];
-          this.#pendingStartElement.line = token.position.line;
-          this.#pendingStartElement.column = token.position.column;
-          this.#pendingStartElement.offset = token.position.offset;
-          this.#hasPendingElement = true;
-          break;
-        }
-
-        case "attribute": {
-          if (this.#hasPendingElement) {
-            this.#pendingStartElement.attributes.push({
-              name: this.#parseName(token.name),
-              value: normalizeAttributeValue(token.value),
-            });
-          }
-          break;
-        }
-
-        case "start_tag_close": {
-          if (this.#hasPendingElement) {
-            const name = this.#parseName(this.#pendingStartElement.name);
-            const { line, column, offset } = this.#pendingStartElement;
-
-            events.push(
-              {
-                type: "start_element",
-                name,
-                attributes: this.#pendingStartElement.attributes,
-                selfClosing: token.selfClosing,
-                line,
-                column,
-                offset,
-              } satisfies XmlStartElementEvent,
-            );
-
-            if (token.selfClosing) {
-              events.push(
-                {
-                  type: "end_element",
-                  name,
-                  line,
-                  column,
-                  offset,
-                } satisfies XmlEndElementEvent,
-              );
-            } else {
-              this.#elementStack.push({
-                rawName: this.#pendingStartElement.name,
-                parsedName: name,
-                line,
-                column,
-                offset,
-              });
-            }
-
-            this.#hasPendingElement = false;
-          }
-          break;
-        }
-
-        case "end_tag": {
-          const expected = this.#elementStack.pop();
-          if (expected === undefined) {
-            throw new XmlSyntaxError(
-              `Unexpected closing tag </${token.name}> with no matching opening tag`,
-              token.position,
-            );
-          }
-          if (expected.rawName !== token.name) {
-            throw new XmlSyntaxError(
-              `Mismatched closing tag: expected </${expected.rawName}> but found </${token.name}>`,
-              token.position,
-            );
-          }
-
-          // Reuse the parsed name from the opening tag - avoids redundant parseName call
-          events.push(
-            {
-              type: "end_element",
-              name: expected.parsedName,
-              line: token.position.line,
-              column: token.position.column,
-              offset: token.position.offset,
-            } satisfies XmlEndElementEvent,
-          );
-          break;
-        }
-
-        case "text": {
-          const text = decodeEntities(token.content);
-
-          if (ignoreWhitespace && WHITESPACE_ONLY_RE.test(text)) {
-            break;
-          }
-
-          events.push(
-            {
-              type: "text",
-              text,
-              line: token.position.line,
-              column: token.position.column,
-              offset: token.position.offset,
-            } satisfies XmlTextEvent,
-          );
-          break;
-        }
-
-        case "cdata": {
-          if (coerceCDataToText) {
-            events.push(
-              {
-                type: "text",
-                text: token.content,
-                line: token.position.line,
-                column: token.position.column,
-                offset: token.position.offset,
-              } satisfies XmlTextEvent,
-            );
-          } else {
-            events.push(
-              {
-                type: "cdata",
-                text: token.content,
-                line: token.position.line,
-                column: token.position.column,
-                offset: token.position.offset,
-              } satisfies XmlCDataEvent,
-            );
-          }
-          break;
-        }
-
-        case "comment": {
-          if (ignoreComments) {
-            break;
-          }
-
-          events.push(
-            {
-              type: "comment",
-              text: token.content,
-              line: token.position.line,
-              column: token.position.column,
-              offset: token.position.offset,
-            } satisfies XmlCommentEvent,
-          );
-          break;
-        }
-
-        case "processing_instruction": {
-          if (ignoreProcessingInstructions) {
-            break;
-          }
-
-          events.push(
-            {
-              type: "processing_instruction",
-              target: token.target,
-              content: token.content,
-              line: token.position.line,
-              column: token.position.column,
-              offset: token.position.offset,
-            } satisfies XmlProcessingInstructionEvent,
-          );
-          break;
-        }
+      if (selfClosing) {
+        this.#callbacks.onEndElement?.(
+          this.#pendingName,
+          this.#pendingColonIndex,
+          this.#pendingLine,
+          this.#pendingColumn,
+          this.#pendingOffset,
+        );
+      } else {
+        this.#elementStack.push({
+          rawName: this.#pendingName,
+          colonIndex: this.#pendingColonIndex,
+          line: this.#pendingLine,
+          column: this.#pendingColumn,
+          offset: this.#pendingOffset,
+        });
       }
+
+      this.#hasPendingElement = false;
+    }
+  }
+
+  onEndTag(
+    name: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    const expected = this.#elementStack.pop();
+    if (expected === undefined) {
+      throw new XmlSyntaxError(
+        `Unexpected closing tag </${name}> with no matching opening tag`,
+        { line, column, offset },
+      );
+    }
+    if (expected.rawName !== name) {
+      throw new XmlSyntaxError(
+        `Mismatched closing tag: expected </${expected.rawName}> but found </${name}>`,
+        { line, column, offset },
+      );
     }
 
-    return events;
+    this.#callbacks.onEndElement?.(
+      name,
+      expected.colonIndex,
+      line,
+      column,
+      offset,
+    );
   }
+
+  onText(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    const { ignoreWhitespace = false } = this.#options;
+    const text = decodeEntities(content);
+
+    if (ignoreWhitespace && WHITESPACE_ONLY_RE.test(text)) {
+      return;
+    }
+
+    this.#callbacks.onText?.(text, line, column, offset);
+  }
+
+  onCData(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    const { coerceCDataToText = false } = this.#options;
+
+    if (coerceCDataToText) {
+      this.#callbacks.onText?.(content, line, column, offset);
+    } else {
+      this.#callbacks.onCData?.(content, line, column, offset);
+    }
+  }
+
+  onComment(
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    const { ignoreComments = false } = this.#options;
+
+    if (ignoreComments) {
+      return;
+    }
+
+    this.#callbacks.onComment?.(content, line, column, offset);
+  }
+
+  onProcessingInstruction(
+    target: string,
+    content: string,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    const { ignoreProcessingInstructions = false } = this.#options;
+
+    if (ignoreProcessingInstructions) {
+      return;
+    }
+
+    this.#callbacks.onProcessingInstruction?.(
+      target,
+      content,
+      line,
+      column,
+      offset,
+    );
+  }
+
+  onDeclaration(
+    version: string,
+    encoding: string | undefined,
+    standalone: "yes" | "no" | undefined,
+    line: number,
+    column: number,
+    offset: number,
+  ): void {
+    this.#callbacks.onDeclaration?.(
+      version,
+      encoding,
+      standalone,
+      line,
+      column,
+      offset,
+    );
+  }
+
+  onDoctype(
+    _name: string,
+    _publicId: string | undefined,
+    _systemId: string | undefined,
+    _line: number,
+    _column: number,
+    _offset: number,
+  ): void {
+    // DOCTYPE is parsed by tokenizer but not emitted as an event
+    // (could add onDoctype to XmlEventCallbacks if needed in future)
+  }
+
+  // ==========================================================================
+  // Public API
+  // ==========================================================================
 
   /**
    * Finalize parsing and validate that all elements are closed.
