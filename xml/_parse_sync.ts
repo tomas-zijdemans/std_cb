@@ -257,16 +257,11 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         error(`Unexpected closing tag </${name}>`);
       }
 
-      const parsedName = parseName(name);
-      if (
-        expected.name.local !== parsedName.local ||
-        expected.name.prefix !== parsedName.prefix
-      ) {
-        const expectedFull = expected.name.prefix
-          ? `${expected.name.prefix}:${expected.name.local}`
-          : expected.name.local;
+      // Compare raw strings directly - equivalent to comparing prefix+local
+      // since XmlName.raw preserves the exact input to parseName()
+      if (expected.name.raw !== name) {
         error(
-          `Mismatched closing tag: expected </${expectedFull}> but found </${name}>`,
+          `Mismatched closing tag: expected </${expected.name.raw}> but found </${name}>`,
         );
       }
       continue;
