@@ -232,7 +232,7 @@ export type XmlEvent =
   | XmlDeclarationEvent;
 
 /**
- * Options for {@linkcode XmlParseStream}.
+ * Options for {@linkcode parseXmlStream}.
  *
  * @example Usage
  * ```ts
@@ -672,15 +672,17 @@ export interface XmlEventCallbacks {
  * Type guard to check if a node is an element.
  *
  * @example Usage
- * ```ts ignore
- * import { parse, isElement } from "@std/xml";
+ * ```ts
+ * import { isElement } from "@std/xml/types";
+ * import { assertEquals } from "@std/assert";
  *
- * const doc = parse("<root><item/></root>");
- * for (const child of doc.root.children) {
- *   if (isElement(child)) {
- *     console.log(child.name.local);
- *   }
- * }
+ * const node = {
+ *   type: "element" as const,
+ *   name: { raw: "item", local: "item" },
+ *   attributes: {},
+ *   children: [],
+ * };
+ * assertEquals(isElement(node), true);
  * ```
  *
  * @param node The node to check.

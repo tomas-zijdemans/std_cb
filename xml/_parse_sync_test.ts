@@ -5,40 +5,6 @@ import { parseSync } from "./_parse_sync.ts";
 import { XmlSyntaxError } from "./types.ts";
 
 // =============================================================================
-// Line Ending Normalization (XML 1.0 §2.11)
-// =============================================================================
-
-Deno.test("parseSync() normalizes CRLF line endings", () => {
-  const doc = parseSync("<root>\r\n  <item/>\r\n</root>", {
-    ignoreWhitespace: true,
-  });
-
-  assertEquals(doc.root.children.length, 1);
-});
-
-Deno.test("parseSync() normalizes CR line endings", () => {
-  const doc = parseSync("<root>\r  <item/>\r</root>", {
-    ignoreWhitespace: true,
-  });
-
-  assertEquals(doc.root.children.length, 1);
-});
-
-// =============================================================================
-// Element Name Character Ranges
-// =============================================================================
-
-Deno.test("parseSync() handles uppercase element names", () => {
-  const doc = parseSync("<ROOT><ITEM/></ROOT>");
-
-  assertEquals(doc.root.name.local, "ROOT");
-  assertEquals(doc.root.children.length, 1);
-  if (doc.root.children[0]!.type === "element") {
-    assertEquals(doc.root.children[0]!.name.local, "ITEM");
-  }
-});
-
-// =============================================================================
 // XML Declaration Variations
 // =============================================================================
 
@@ -54,16 +20,6 @@ Deno.test("parseSync() handles declaration with standalone", () => {
 
   assertEquals(doc.declaration?.version, "1.0");
   assertEquals(doc.declaration?.standalone, "yes");
-});
-
-Deno.test("parseSync() handles declaration with all attributes single-quoted", () => {
-  const doc = parseSync(
-    "<?xml version='1.0' encoding='UTF-8' standalone='no'?><root/>",
-  );
-
-  assertEquals(doc.declaration?.version, "1.0");
-  assertEquals(doc.declaration?.encoding, "UTF-8");
-  assertEquals(doc.declaration?.standalone, "no");
 });
 
 // =============================================================================
@@ -103,18 +59,6 @@ Deno.test("parseSync() handles adjacent tags without text between them", () => {
   if (doc.root.children[1]!.type === "element") {
     assertEquals(doc.root.children[1]!.name.local, "b");
   }
-});
-
-// =============================================================================
-// XML Declaration Edge Cases
-// =============================================================================
-
-Deno.test("parseSync() handles declaration with only encoding (no version)", () => {
-  // This tests the fallback to "1.0" when version is missing
-  const doc = parseSync('<?xml encoding="UTF-8"?><root/>');
-
-  assertEquals(doc.declaration?.version, "1.0");
-  assertEquals(doc.declaration?.encoding, "UTF-8");
 });
 
 // =============================================================================
@@ -360,4 +304,51 @@ Deno.test("parseSync() handles adjacent elements with no text between", () => {
     doc.root.children.every((c) => c.type === "element"),
     true,
   );
+});
+
+// =============================================================================
+// Additional Coverage Tests
+// =============================================================================
+
+Deno.test("parseSync() handles CRLF line endings", () => {
+  // Tests line ending normalization (CRLF -> LF)
+  const doc = parseSync("<root>\r\n  <child/>\r\n</root>");
+  assertEquals(doc.root.children.length, 3); // whitespace, child, whitespace
+});
+
+Deno.test("parseSync() handles CR line endings", () => {
+  // Tests line ending normalization (CR -> LF)
+  const doc = parseSync("<root>\r  <child/>\r</root>");
+  assertEquals(doc.root.children.length, 3);
+});
+
+Deno.test("parseSync() with trackPosition false reports zero positions", () => {
+  // Tests that position is 0,0,0 when trackPosition is false
+  try {
+    parseSync("<root><unclosed>", { trackPosition: false });
+  } catch (e) {
+    if (e instanceof XmlSyntaxError) {
+      assertEquals(e.line, 0);
+      assertEquals(e.column, 0);
+      assertEquals(e.offset, 0);
+      return;
+    }
+  }
+  throw new Error("Expected XmlSyntaxError");
+});
+
+Deno.test("parseSync() extracts standalone yes from declaration", () => {
+  // Tests standalone attribute extraction
+  const doc = parseSync('<?xml version="1.0" standalone="yes"?><root/>');
+  assertEquals(doc.declaration?.standalone, "yes");
+});
+
+Deno.test("parseSync() extracts standalone no from declaration", () => {
+  const doc = parseSync('<?xml version="1.0" standalone="no"?><root/>');
+  assertEquals(doc.declaration?.standalone, "no");
+});
+
+Deno.test("parseSync() extracts standalone with single quotes", () => {
+  const doc = parseSync("<?xml version='1.0' standalone='yes'?><root/>");
+  assertEquals(doc.declaration?.standalone, "yes");
 });

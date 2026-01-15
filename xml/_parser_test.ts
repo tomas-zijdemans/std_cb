@@ -51,12 +51,12 @@ function createEventCollector(): {
       events.push({
         type: "declaration",
         version,
-        encoding,
-        standalone,
+        ...(encoding !== undefined ? { encoding } : {}),
+        ...(standalone !== undefined ? { standalone } : {}),
         line,
         column,
         offset,
-      });
+      } as XmlEvent);
     },
     onStartElement(
       name,

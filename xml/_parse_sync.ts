@@ -8,7 +8,7 @@
  * builds the XML tree without intermediate tokens or events. It is used by
  * the `parse()` function for parsing complete XML strings.
  *
- * For streaming parsing, use {@linkcode XmlParseStream} from `parse_stream.ts`.
+ * For streaming parsing, use {@linkcode parseXmlStream} from `parse_stream.ts`.
  *
  * @module
  */
