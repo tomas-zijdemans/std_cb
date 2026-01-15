@@ -8,7 +8,7 @@
  */
 
 import type { ParseOptions, XmlDocument } from "./types.ts";
-import { parseSync } from "./_parse_sync.ts";
+import { parseWithCallbacks } from "./_document_builder.ts";
 
 export type { ParseOptions } from "./types.ts";
 
@@ -74,5 +74,5 @@ export type { ParseOptions } from "./types.ts";
  * @throws {XmlSyntaxError} If the XML is malformed or has no root element.
  */
 export function parse(xml: string, options?: ParseOptions): XmlDocument {
-  return parseSync(xml, options);
+  return parseWithCallbacks(xml, options);
 }
