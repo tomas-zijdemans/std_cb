@@ -44,7 +44,6 @@ const CC_QUESTION = 63; // ?
 const CC_EQ = 61; // =
 const CC_DQUOTE = 34; // "
 const CC_SQUOTE = 39; // '
-const CC_LF = 10; // \n
 const CC_LBRACKET = 91; // [
 const CC_RBRACKET = 93; // ]
 const CC_DASH = 45; // -
@@ -64,6 +63,9 @@ type MutableElement = {
  * providing significant performance improvements over the streaming parser
  * for non-streaming use cases.
  *
+ * Uses lazy position tracking: line/column are only computed when an error
+ * occurs, eliminating tracking overhead during successful parsing.
+ *
  * @param xml The XML string to parse.
  * @param options Options to control parsing behavior.
  * @returns The parsed document.
@@ -78,67 +80,56 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
   const input = xml.includes("\r") ? xml.replace(LINE_ENDING_RE, "\n") : xml;
   const len = input.length;
 
-  // Parser state
+  // Parser state - only track position offset, not line/column
   let pos = 0;
-  let line = 1;
-  let col = 1;
 
   // Tree building state
   const stack: MutableElement[] = [];
   let root: MutableElement | undefined;
   let declaration: XmlDeclarationEvent | undefined;
 
+  /**
+   * Compute line and column from offset on-demand (lazy position tracking).
+   * Only called when an error occurs, avoiding overhead during successful parsing.
+   */
+  function computePosition(offset: number): {
+    line: number;
+    column: number;
+    offset: number;
+  } {
+    if (!trackPosition) {
+      return { line: 0, column: 0, offset: 0 };
+    }
+    let line = 1;
+    let lastNlPos = -1;
+    let searchStart = 0;
+    while (true) {
+      const nlPos = input.indexOf("\n", searchStart);
+      if (nlPos === -1 || nlPos >= offset) break;
+      line++;
+      lastNlPos = nlPos;
+      searchStart = nlPos + 1;
+    }
+    return {
+      line,
+      column: offset - lastNlPos,
+      offset,
+    };
+  }
+
   function error(message: string): never {
-    throw new XmlSyntaxError(
-      message,
-      trackPosition
-        ? { line, column: col, offset: pos }
-        : { line: 0, column: 0, offset: 0 },
-    );
+    throw new XmlSyntaxError(message, computePosition(pos));
   }
 
   function errorUnterminated(message: string): never {
-    while (pos < len) advance();
+    pos = len;
     error(message);
-  }
-
-  function advance(): void {
-    if (trackPosition) {
-      if (input.charCodeAt(pos) === CC_LF) {
-        line++;
-        col = 1;
-      } else {
-        col++;
-      }
-    }
-    pos++;
-  }
-
-  function updatePositionForRange(start: number, end: number): void {
-    if (!trackPosition) return;
-    for (let i = start; i < end; i++) {
-      if (input.charCodeAt(i) === CC_LF) {
-        line++;
-        col = 1;
-      } else {
-        col++;
-      }
-    }
   }
 
   function skipWhitespace(): void {
     while (pos < len) {
       const code = input.charCodeAt(pos);
       if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
-        // Inlined advance() for performance
-        if (trackPosition) {
-          if (code === CC_LF) {
-            line++;
-            col = 1;
-          } else {
-            col++;
-          }
-        }
         pos++;
       } else {
         break;
@@ -162,7 +153,6 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         code > 127 // non-ASCII
       ) {
         pos++;
-        if (trackPosition) col++;
       } else {
         break;
       }
@@ -178,7 +168,6 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
     const quoteChar = input[pos]!;
     const start = pos + 1;
 
-    // Use indexOf for fast scanning (23x faster than char-by-char)
     const closeIdx = input.indexOf(quoteChar, start);
     if (closeIdx === -1) {
       pos = len;
@@ -194,10 +183,6 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       error("'<' not allowed in attribute value");
     }
 
-    // Update position tracking
-    if (trackPosition) {
-      updatePositionForRange(pos, closeIdx + 1);
-    }
     pos = closeIdx + 1;
 
     // Normalize whitespace (§3.3.3) and decode entities
@@ -206,14 +191,9 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
 
   function readText(): string {
     const start = pos;
-    // Use indexOf for fast scanning (2-40x faster than char-by-char)
     const idx = input.indexOf("<", pos);
-    const end = idx === -1 ? len : idx;
-    if (trackPosition) {
-      updatePositionForRange(start, end);
-    }
-    pos = end;
-    return decodeEntities(input.slice(start, end));
+    pos = idx === -1 ? len : idx;
+    return decodeEntities(input.slice(start, pos));
   }
 
   function addNode(node: XmlTextNode | XmlCDataNode | XmlCommentNode): void {
@@ -233,7 +213,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       continue;
     }
 
-    advance();
+    pos++; // Skip '<'
 
     if (pos >= len) {
       error("Unexpected end of input after '<'");
@@ -243,13 +223,13 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
 
     // End tag: </name>
     if (code === CC_SLASH) {
-      advance();
+      pos++; // Skip '/'
       const name = readName();
       skipWhitespace();
       if (input.charCodeAt(pos) !== CC_GT) {
         error("Expected '>' in end tag");
       }
-      advance();
+      pos++; // Skip '>'
 
       const expected = stack.pop();
       if (!expected) {
@@ -268,7 +248,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
 
     // Comment, CDATA, or DOCTYPE
     if (code === CC_BANG) {
-      advance();
+      pos++; // Skip '!'
 
       // Comment: <!--...-->
       if (
@@ -276,60 +256,53 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         input.charCodeAt(pos) === CC_DASH &&
         input.charCodeAt(pos + 1) === CC_DASH
       ) {
-        pos += 2;
-        if (trackPosition) col += 2;
+        pos += 2; // Skip '--'
         const start = pos;
 
         const endIdx = input.indexOf("-->", pos);
         if (endIdx === -1) errorUnterminated("Unterminated comment");
 
-        updatePositionForRange(start, endIdx);
         if (!ignoreComments) {
           addNode({ type: "comment", text: input.slice(start, endIdx) });
         }
         pos = endIdx + 3;
-        if (trackPosition) col += 3;
         continue;
       }
 
       // CDATA: <![CDATA[...]]>
       if (pos + 6 < len && input.slice(pos, pos + 7) === "[CDATA[") {
-        pos += 7;
-        if (trackPosition) col += 7;
+        pos += 7; // Skip '[CDATA['
         const start = pos;
 
         const endIdx = input.indexOf("]]>", pos);
         if (endIdx === -1) errorUnterminated("Unterminated CDATA section");
 
-        updatePositionForRange(start, endIdx);
         addNode({ type: "cdata", text: input.slice(start, endIdx) });
         pos = endIdx + 3;
-        if (trackPosition) col += 3;
         continue;
       }
 
       // DOCTYPE: <!DOCTYPE...>
       if (pos + 6 < len && input.slice(pos, pos + 7) === "DOCTYPE") {
-        pos += 7;
-        if (trackPosition) col += 7;
+        pos += 7; // Skip 'DOCTYPE'
 
         // Skip DOCTYPE content (we don't use it for tree building)
         while (pos < len && input.charCodeAt(pos) !== CC_GT) {
           if (input.charCodeAt(pos) === CC_LBRACKET) {
             // Internal subset - skip until matching ]
             let depth = 1;
-            advance();
+            pos++;
             while (pos < len && depth > 0) {
               const dc = input.charCodeAt(pos);
               if (dc === CC_LBRACKET) depth++;
               else if (dc === CC_RBRACKET) depth--;
-              advance();
+              pos++;
             }
           } else {
-            advance();
+            pos++;
           }
         }
-        if (pos < len) advance(); // '>'
+        if (pos < len) pos++; // Skip '>'
         continue;
       }
 
@@ -338,7 +311,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
 
     // Processing instruction or XML declaration: <?target content?>
     if (code === CC_QUESTION) {
-      advance();
+      pos++; // Skip '?'
       const target = readName();
       const contentStart = pos;
 
@@ -347,11 +320,8 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
         errorUnterminated("Unterminated processing instruction");
       }
 
-      updatePositionForRange(pos, endIdx);
-
       const content = input.slice(contentStart, endIdx).trim();
       pos = endIdx + 2;
-      if (trackPosition) col += 2;
 
       // Direct comparison (6x faster than toLowerCase)
       if (target === "xml" || target === "XML") {
@@ -399,16 +369,16 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       const chCode = input.charCodeAt(pos);
 
       if (chCode === CC_GT) {
-        advance();
+        pos++; // Skip '>'
         break;
       }
 
       if (chCode === CC_SLASH) {
-        advance();
+        pos++; // Skip '/'
         if (input.charCodeAt(pos) !== CC_GT) {
           error("Expected '>' after '/' in self-closing tag");
         }
-        advance();
+        pos++; // Skip '>'
         selfClosing = true;
         break;
       }
@@ -425,7 +395,7 @@ export function parseSync(xml: string, options?: ParseOptions): XmlDocument {
       if (input.charCodeAt(pos) !== CC_EQ) {
         error("Expected '=' after attribute name");
       }
-      advance();
+      pos++; // Skip '='
       skipWhitespace();
 
       const attrValue = readQuotedValue();
