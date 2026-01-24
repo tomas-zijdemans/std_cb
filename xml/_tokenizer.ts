@@ -142,6 +142,36 @@ const CC_S_UPPER = 83; // S
 // Non-ASCII uses permissive `code > 127` fallback - accepts some invalid chars
 // but is pragmatic for a non-validating parser.
 
+// Pre-computed lookup tables for name character validation
+// Index corresponds to character code 0-255, value 1 = valid, 0 = invalid
+const NAME_START_CHAR_TABLE = new Uint8Array(256);
+const NAME_CHAR_TABLE = new Uint8Array(256);
+
+// Initialize lookup tables at module load
+for (let i = 0; i < 256; i++) {
+  // NameStartChar: a-z, A-Z, _, :, or non-ASCII (128-255)
+  NAME_START_CHAR_TABLE[i] = (
+      (i >= CC_A_LOWER && i <= CC_Z_LOWER) || // a-z
+      (i >= CC_A_UPPER && i <= CC_Z_UPPER) || // A-Z
+      i === CC_UNDERSCORE || i === CC_COLON || // _ :
+      i > 127 // non-ASCII
+    )
+    ? 1
+    : 0;
+
+  // NameChar: NameStartChar + 0-9, ., -
+  NAME_CHAR_TABLE[i] = (
+      (i >= CC_A_LOWER && i <= CC_Z_LOWER) || // a-z
+      (i >= CC_A_UPPER && i <= CC_Z_UPPER) || // A-Z
+      (i >= CC_0 && i <= CC_9) || // 0-9
+      i === CC_UNDERSCORE || i === CC_COLON || // _ :
+      i === CC_DOT || i === CC_DASH || // . -
+      i > 127 // non-ASCII
+    )
+    ? 1
+    : 0;
+}
+
 /** Sentinel position used when position tracking is disabled. */
 const NO_POSITION: XmlPosition = { line: 0, column: 0, offset: 0 };
 
@@ -230,21 +260,15 @@ export class XmlTokenizer {
     );
   }
 
-  // Optimized character checks using charCode directly
+  // Optimized character checks using pre-computed lookup tables
   #isNameStartCharCode(code: number): boolean {
-    return (code >= CC_A_LOWER && code <= CC_Z_LOWER) || // a-z
-      (code >= CC_A_UPPER && code <= CC_Z_UPPER) || // A-Z
-      code === CC_UNDERSCORE || code === CC_COLON || // _ :
-      code > 127; // non-ASCII
+    // Lookup table for 0-255, fallback to true for code points > 255 (rare)
+    return code < 256 ? NAME_START_CHAR_TABLE[code] === 1 : true;
   }
 
   #isNameCharCode(code: number): boolean {
-    return (code >= CC_A_LOWER && code <= CC_Z_LOWER) || // a-z
-      (code >= CC_A_UPPER && code <= CC_Z_UPPER) || // A-Z
-      (code >= CC_0 && code <= CC_9) || // 0-9
-      code === CC_UNDERSCORE || code === CC_COLON || // _ :
-      code === CC_DOT || code === CC_DASH || // . -
-      code > 127; // non-ASCII
+    // Lookup table for 0-255, fallback to true for code points > 255 (rare)
+    return code < 256 ? NAME_CHAR_TABLE[code] === 1 : true;
   }
 
   #isWhitespaceCode(code: number): boolean {
