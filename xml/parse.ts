@@ -15,57 +15,14 @@ export type { ParseOptions } from "./types.ts";
 /**
  * Parses an XML string into a document tree.
  *
- * @example Basic usage
+ * @example Usage
  * ```ts
  * import { parse } from "@std/xml/parse";
  * import { assertEquals } from "@std/assert";
  *
- * const xml = `<product id="123"><name>Widget</name></product>`;
- * const doc = parse(xml);
- *
- * assertEquals(doc.root.name.local, "product");
- * assertEquals(doc.root.attributes["id"], "123");
- * ```
- *
- * @example With nested elements
- * ```ts
- * import { parse } from "@std/xml/parse";
- * import { assertEquals } from "@std/assert";
- *
- * const xml = `<root><child>text</child></root>`;
- * const doc = parse(xml);
- *
- * assertEquals(doc.root.children.length, 1);
- * if (doc.root.children[0]?.type === "element") {
- *   assertEquals(doc.root.children[0].name.local, "child");
- * }
- * ```
- *
- * @example Ignoring whitespace
- * ```ts
- * import { parse } from "@std/xml/parse";
- * import { assertEquals } from "@std/assert";
- *
- * const xml = `<root>
- *   <item/>
- * </root>`;
- * const doc = parse(xml, { ignoreWhitespace: true });
- *
- * // Whitespace-only text nodes are removed
- * assertEquals(doc.root.children.length, 1);
- * ```
- *
- * @example Disabling position tracking for performance
- * ```ts
- * import { parse } from "@std/xml/parse";
- * import { assertEquals } from "@std/assert";
- *
- * // Position tracking is enabled by default for better error messages.
- * // Disable it for a performance boost when parsing trusted/valid XML.
- * const xml = `<root><item/></root>`;
- * const doc = parse(xml, { trackPosition: false });
- *
+ * const doc = parse(`<root id="1"><child/></root>`);
  * assertEquals(doc.root.name.local, "root");
+ * assertEquals(doc.root.attributes["id"], "1");
  * ```
  *
  * @param xml The XML string to parse.

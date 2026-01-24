@@ -21,22 +21,6 @@ export type { ParseStreamOptions, XmlEventCallbacks } from "./types.ts";
  * Use this when you need maximum throughput and are comfortable with the
  * callback-based API.
  *
- * @example Basic usage with fetch
- * ```ts ignore
- * import { parseXmlStream } from "@std/xml/parse-stream";
- *
- * const response = await fetch("https://example.com/feed.xml");
- * const textStream = response.body!.pipeThrough(new TextDecoderStream());
- *
- * let itemCount = 0;
- * await parseXmlStream(textStream, {
- *   onStartElement(name) {
- *     if (name === "item") itemCount++;
- *   },
- * });
- * console.log(`Found ${itemCount} items`);
- * ```
- *
  * @example Collecting data from elements
  * ```ts
  * import { parseXmlStream } from "@std/xml/parse-stream";
@@ -70,22 +54,6 @@ export type { ParseStreamOptions, XmlEventCallbacks } from "./types.ts";
  * assertEquals(items, ["First", "Second"]);
  * ```
  *
- * @example With position tracking
- * ```ts ignore
- * import { parseXmlStream } from "@std/xml/parse-stream";
- *
- * const xml = `<root><error/></root>`;
- * const stream = ReadableStream.from([xml]);
- *
- * await parseXmlStream(stream, {
- *   onStartElement(name, _colonIndex, _attrs, _selfClosing, line, column) {
- *     if (name === "error") {
- *       console.log(`Error element at line ${line}, column ${column}`);
- *     }
- *   },
- * }, { trackPosition: true });
- * ```
- *
  * @param source The XML text stream to parse. Can be a ReadableStream or any
  *               AsyncIterable that yields string chunks.
  * @param callbacks Callback functions invoked for each XML event. All callbacks
@@ -102,7 +70,6 @@ export async function parseXmlStream(
   const tokenizer = new XmlTokenizer({ trackPosition });
   const parser = new XmlEventParser(callbacks, options);
 
-  // Both ReadableStream and AsyncIterable implement Symbol.asyncIterator
   for await (const chunk of source) {
     tokenizer.process(chunk, parser);
   }
@@ -116,17 +83,20 @@ export async function parseXmlStream(
  * This is a convenience wrapper around {@linkcode parseXmlStream} that handles
  * text decoding. For pre-decoded text streams, use `parseXmlStream` directly.
  *
- * @example Parsing bytes from fetch
- * ```ts ignore
+ * @example Basic usage
+ * ```ts
  * import { parseXmlStreamFromBytes } from "@std/xml/parse-stream";
+ * import { assertEquals } from "@std/assert";
  *
- * const response = await fetch("https://example.com/feed.xml");
+ * const xml = new TextEncoder().encode("<root>Hello</root>");
+ * const stream = ReadableStream.from([xml]);
  *
- * await parseXmlStreamFromBytes(response.body!, {
- *   onStartElement(name) {
- *     console.log(`Element: ${name}`);
- *   },
+ * let text = "";
+ * await parseXmlStreamFromBytes(stream, {
+ *   onText(t) { text += t; },
  * });
+ *
+ * assertEquals(text, "Hello");
  * ```
  *
  * @param source The XML byte stream to parse.
@@ -139,17 +109,13 @@ export function parseXmlStreamFromBytes(
   callbacks: XmlEventCallbacks,
   options: ParseStreamOptions = {},
 ): Promise<void> {
-  // Both ReadableStream and AsyncIterable implement Symbol.asyncIterator,
-  // so we can always use decodeAsyncIterable for streaming text decoding
-  const textStream = decodeAsyncIterable(source as AsyncIterable<Uint8Array>);
+  const textStream = decodeAsyncIterable(source);
   return parseXmlStream(textStream, callbacks, options);
 }
 
-/**
- * Helper to decode an AsyncIterable of bytes to strings.
- */
+/** Helper to decode an AsyncIterable of bytes to strings. */
 async function* decodeAsyncIterable(
-  source: AsyncIterable<Uint8Array>,
+  source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>,
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   for await (const chunk of source) {

@@ -3,13 +3,6 @@
 
 /**
  * Position information for error reporting.
- *
- * @example Usage
- * ```ts
- * import type { XmlPosition } from "@std/xml/types";
- *
- * const pos: XmlPosition = { line: 10, column: 5, offset: 150 };
- * ```
  */
 export interface XmlPosition {
   /** Line number (1-indexed). */
@@ -90,13 +83,6 @@ export class XmlSyntaxError extends SyntaxError {
 
 /**
  * A qualified XML name with optional namespace prefix.
- *
- * @example Usage
- * ```ts
- * import type { XmlName } from "@std/xml/types";
- *
- * const name: XmlName = { raw: "ns:item", local: "item", prefix: "ns" };
- * ```
  */
 export interface XmlName {
   /** The original unsplit name (e.g., "ns:item" or "item"). */
@@ -109,16 +95,6 @@ export interface XmlName {
 
 /**
  * An XML attribute with its qualified name and value.
- *
- * @example Usage
- * ```ts
- * import type { XmlAttribute } from "@std/xml/types";
- *
- * const attr: XmlAttribute = {
- *   name: { raw: "id", local: "id" },
- *   value: "123",
- * };
- * ```
  */
 export interface XmlAttribute {
   /** The qualified name of the attribute. */
@@ -232,33 +208,34 @@ export type XmlEvent =
   | XmlDeclarationEvent;
 
 /**
- * Options for {@linkcode parseXmlStream}.
- *
- * @example Usage
- * ```ts
- * import type { ParseStreamOptions } from "@std/xml/types";
- *
- * const options: ParseStreamOptions = {
- *   ignoreWhitespace: true,
- *   ignoreComments: true,
- * };
- * ```
+ * Base options shared by parsing functions.
  */
-export interface ParseStreamOptions {
+export interface BaseParseOptions {
   /**
-   * If true, text nodes containing only whitespace are not emitted.
+   * If true, text nodes containing only whitespace are not emitted/included.
    *
    * @default {false}
    */
   readonly ignoreWhitespace?: boolean;
 
   /**
-   * If true, comment events are not emitted.
+   * If true, comments are not emitted/included.
    *
    * @default {false}
    */
   readonly ignoreComments?: boolean;
 
+  /**
+   * If true, track line/column positions for events and error messages.
+   * Disabling improves performance but makes debugging harder.
+   */
+  readonly trackPosition?: boolean;
+}
+
+/**
+ * Options for {@linkcode parseXmlStream}.
+ */
+export interface ParseStreamOptions extends BaseParseOptions {
   /**
    * If true, processing instruction events are not emitted.
    *
@@ -272,68 +249,15 @@ export interface ParseStreamOptions {
    * @default {false}
    */
   readonly coerceCDataToText?: boolean;
-
-  /**
-   * If true, track line/column positions for events and error messages.
-   * Disabling position tracking improves performance by ~20% but makes
-   * debugging harder as all positions will be reported as line 0, column 0.
-   *
-   * @default {false}
-   */
-  readonly trackPosition?: boolean;
 }
 
 /**
  * Options for {@linkcode parse}.
- *
- * @example Usage
- * ```ts
- * import type { ParseOptions } from "@std/xml/types";
- *
- * const options: ParseOptions = {
- *   ignoreWhitespace: true,
- *   ignoreComments: true,
- * };
- * ```
  */
-export interface ParseOptions {
-  /**
-   * If true, text nodes containing only whitespace are removed.
-   *
-   * @default {false}
-   */
-  readonly ignoreWhitespace?: boolean;
-
-  /**
-   * If true, comments are not included in the tree.
-   *
-   * @default {false}
-   */
-  readonly ignoreComments?: boolean;
-
-  /**
-   * If true, track line/column positions for error messages.
-   * Disabling position tracking improves performance but makes
-   * debugging harder as all position fields (line, column, offset)
-   * will be reported as 0 in errors.
-   *
-   * @default {true}
-   */
-  readonly trackPosition?: boolean;
-}
+export interface ParseOptions extends BaseParseOptions {}
 
 /**
  * Options for {@linkcode stringify}.
- *
- * @example Usage
- * ```ts
- * import type { StringifyOptions } from "@std/xml/types";
- *
- * const options: StringifyOptions = {
- *   indent: "  ",
- *   declaration: true,
- * };
- * ```
  */
 export interface StringifyOptions {
   /**
@@ -424,31 +348,51 @@ export interface XmlDocument {
 // Callback Interfaces (for zero-allocation streaming)
 // ============================================================================
 
+/** Callback for XML declarations. */
+export type XmlDeclarationCallback = (
+  version: string,
+  encoding: string | undefined,
+  standalone: "yes" | "no" | undefined,
+  line: number,
+  column: number,
+  offset: number,
+) => void;
+
+/** Callback for DOCTYPE declarations. */
+export type XmlDoctypeCallback = (
+  name: string,
+  publicId: string | undefined,
+  systemId: string | undefined,
+  line: number,
+  column: number,
+  offset: number,
+) => void;
+
+/** Callback for text, CDATA, or comment content with position. */
+export type XmlContentCallback = (
+  content: string,
+  line: number,
+  column: number,
+  offset: number,
+) => void;
+
+/** Callback for processing instructions. */
+export type XmlProcessingInstructionCallback = (
+  target: string,
+  content: string,
+  line: number,
+  column: number,
+  offset: number,
+) => void;
+
 /**
  * Callbacks for tokenizer output - enables zero-allocation token emission.
  *
  * Instead of creating token objects, the tokenizer invokes these callbacks
- * directly with primitive values. This eliminates ~10,000 object allocations
- * per 1,000 elements in typical documents.
- *
- * @example Usage
- * ```ts ignore
- * const tokenizer = new XmlTokenizer();
- * tokenizer.process("<root>text</root>", {
- *   onStartTagOpen(name, line, column, offset) {
- *     console.log(`Start tag: ${name}`);
- *   },
- *   onText(content, line, column, offset) {
- *     console.log(`Text: ${content}`);
- *   },
- * });
- * ```
+ * directly with primitive values.
  */
 export interface XmlTokenCallbacks {
-  /**
-   * Called when a start tag opens (e.g., `<element`).
-   * Attributes and closing will follow.
-   */
+  /** Called when a start tag opens (e.g., `<element`). */
   onStartTagOpen?(
     name: string,
     line: number,
@@ -463,65 +407,25 @@ export interface XmlTokenCallbacks {
   onStartTagClose?(selfClosing: boolean): void;
 
   /** Called when an end tag is encountered (e.g., `</element>`). */
-  onEndTag?(
-    name: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onEndTag?(name: string, line: number, column: number, offset: number): void;
 
   /** Called for text content between tags. */
-  onText?(
-    content: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onText?: XmlContentCallback;
 
   /** Called for CDATA sections. */
-  onCData?(
-    content: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onCData?: XmlContentCallback;
 
   /** Called for XML comments. */
-  onComment?(
-    content: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onComment?: XmlContentCallback;
 
-  /** Called for processing instructions (e.g., `<?target content?>`). */
-  onProcessingInstruction?(
-    target: string,
-    content: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  /** Called for processing instructions. */
+  onProcessingInstruction?: XmlProcessingInstructionCallback;
 
-  /** Called for XML declarations (e.g., `<?xml version="1.0"?>`). */
-  onDeclaration?(
-    version: string,
-    encoding: string | undefined,
-    standalone: "yes" | "no" | undefined,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  /** Called for XML declarations. */
+  onDeclaration?: XmlDeclarationCallback;
 
   /** Called for DOCTYPE declarations. */
-  onDoctype?(
-    name: string,
-    publicId: string | undefined,
-    systemId: string | undefined,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onDoctype?: XmlDoctypeCallback;
 }
 
 /**
@@ -530,15 +434,6 @@ export interface XmlTokenCallbacks {
  * Instead of creating an array of attribute objects, attributes are accessed
  * by index through this interface. The implementation reuses internal arrays
  * across elements.
- *
- * @example Usage
- * ```ts ignore
- * function handleElement(name: string, attrs: XmlAttributeIterator) {
- *   for (let i = 0; i < attrs.count; i++) {
- *     console.log(`${attrs.getName(i)}="${attrs.getValue(i)}"`);
- *   }
- * }
- * ```
  */
 export interface XmlAttributeIterator {
   /** The number of attributes. */
@@ -561,50 +456,17 @@ export interface XmlAttributeIterator {
  * Callbacks for event-level output - enables zero-allocation event emission.
  *
  * The parser invokes these callbacks instead of creating XmlEvent objects.
- * Combined with XmlTokenCallbacks, this eliminates all intermediate allocations
- * in the parsing pipeline.
- *
- * @example Usage
- * ```ts ignore
- * await parseXmlStream(response.body, {
- *   onStartElement(name, colonIndex, attrs, selfClosing, line, col, offset) {
- *     const localName = colonIndex === -1 ? name : name.slice(colonIndex + 1);
- *     console.log(`Element: ${localName}`);
- *   },
- *   onText(text, line, col, offset) {
- *     console.log(`Text: ${text}`);
- *   },
- * });
- * ```
  */
 export interface XmlEventCallbacks {
   /** Called for XML declarations. */
-  onDeclaration?(
-    version: string,
-    encoding: string | undefined,
-    standalone: "yes" | "no" | undefined,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onDeclaration?: XmlDeclarationCallback;
 
   /** Called for DOCTYPE declarations. */
-  onDoctype?(
-    name: string,
-    publicId: string | undefined,
-    systemId: string | undefined,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onDoctype?: XmlDoctypeCallback;
 
   /**
    * Called when an element starts.
-   *
-   * @param name The raw element name (e.g., "ns:element").
    * @param colonIndex Index of ':' in name, or -1 if no prefix.
-   * @param attributes Reusable attribute accessor.
-   * @param selfClosing Whether this is a self-closing tag.
    */
   onStartElement?(
     name: string,
@@ -618,8 +480,6 @@ export interface XmlEventCallbacks {
 
   /**
    * Called when an element ends.
-   *
-   * @param name The raw element name.
    * @param colonIndex Index of ':' in name, or -1 if no prefix.
    */
   onEndElement?(
@@ -631,37 +491,16 @@ export interface XmlEventCallbacks {
   ): void;
 
   /** Called for text content (entity-decoded). */
-  onText?(
-    text: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onText?: XmlContentCallback;
 
   /** Called for CDATA sections. */
-  onCData?(
-    text: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onCData?: XmlContentCallback;
 
   /** Called for comments. */
-  onComment?(
-    text: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onComment?: XmlContentCallback;
 
   /** Called for processing instructions. */
-  onProcessingInstruction?(
-    target: string,
-    content: string,
-    line: number,
-    column: number,
-    offset: number,
-  ): void;
+  onProcessingInstruction?: XmlProcessingInstructionCallback;
 }
 
 // ============================================================================
@@ -676,12 +515,7 @@ export interface XmlEventCallbacks {
  * import { isElement } from "@std/xml/types";
  * import { assertEquals } from "@std/assert";
  *
- * const node = {
- *   type: "element" as const,
- *   name: { raw: "item", local: "item" },
- *   attributes: {},
- *   children: [],
- * };
+ * const node = { type: "element" as const, name: { raw: "item", local: "item" }, attributes: {}, children: [] };
  * assertEquals(isElement(node), true);
  * ```
  *

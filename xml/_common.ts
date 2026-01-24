@@ -43,14 +43,6 @@ export const STANDALONE_RE = /standalone\s*=\s*(?:"(yes|no)"|'(yes|no)')/;
 /**
  * Parses a qualified XML name into its prefix and local parts.
  *
- * @example Usage
- * ```ts
- * import { parseName } from "./_common.ts";
- *
- * parseName("ns:element"); // { raw: "ns:element", prefix: "ns", local: "element" }
- * parseName("element");    // { raw: "element", local: "element" }
- * ```
- *
  * @param name The raw name string (e.g., "ns:element" or "element")
  * @returns An XmlName object with raw, local and optional prefix
  */

@@ -18,6 +18,32 @@ const ATTR_ENCODE_RE = /[<>&'"\t\n\r]/g;
  */
 const BARE_AMPERSAND_RE = /&(?![a-zA-Z][a-zA-Z0-9]*;|#[0-9]+;|#x[0-9a-fA-F]+;)/;
 
+/** XML 1.0 §4.6 predefined entities (decode). */
+const NAMED_ENTITIES: Record<string, string> = {
+  lt: "<",
+  gt: ">",
+  amp: "&",
+  apos: "'",
+  quot: '"',
+};
+
+/** XML 1.0 §4.6 predefined entities (encode). */
+const ENTITY_MAP: Record<string, string> = {
+  "<": "&lt;",
+  ">": "&gt;",
+  "&": "&amp;",
+  "'": "&apos;",
+  '"': "&quot;",
+};
+
+/** Entity map extended with whitespace for attribute values (§3.3.3). */
+const ATTR_ENTITY_MAP: Record<string, string> = {
+  ...ENTITY_MAP,
+  "\t": "&#9;",
+  "\n": "&#10;",
+  "\r": "&#13;",
+};
+
 /**
  * Checks if a code point is a valid XML 1.0 Char per §2.2.
  *
@@ -85,40 +111,17 @@ export function decodeEntities(
   }
 
   return text.replace(ENTITY_RE, (match, entity: string) => {
-    if (entity.startsWith("#x")) {
-      // Hexadecimal character reference
-      const codePoint = parseInt(entity.slice(2), 16);
-      // Invalid per XML 1.0 §4.1 WFC: Legal Character - must match Char production
-      if (!isValidXmlChar(codePoint)) {
-        return match;
-      }
-      return String.fromCodePoint(codePoint);
-    }
+    // Character reference (decimal or hexadecimal)
     if (entity.startsWith("#")) {
-      // Decimal character reference
-      const codePoint = parseInt(entity.slice(1), 10);
+      const isHex = entity[1] === "x";
+      const codePoint = parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10);
       // Invalid per XML 1.0 §4.1 WFC: Legal Character - must match Char production
-      if (!isValidXmlChar(codePoint)) {
-        return match;
-      }
-      return String.fromCodePoint(codePoint);
+      return isValidXmlChar(codePoint)
+        ? String.fromCodePoint(codePoint)
+        : match;
     }
-    // Named entity - use switch for optimal performance
-    switch (entity) {
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "amp":
-        return "&";
-      case "apos":
-        return "'";
-      case "quot":
-        return '"';
-      default:
-        // Unknown entity - return as-is
-        return match;
-    }
+    // Named entity - return as-is if unknown
+    return NAMED_ENTITIES[entity] ?? match;
   });
 }
 
@@ -131,22 +134,7 @@ export function decodeEntities(
 export function encodeEntities(text: string): string {
   // Fast path: no special characters means nothing to encode
   if (!/[<>&'"]/.test(text)) return text;
-  return text.replace(SPECIAL_CHARS_RE, (char) => {
-    switch (char) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case "'":
-        return "&apos;";
-      case '"':
-        return "&quot;";
-      default:
-        return char;
-    }
-  });
+  return text.replace(SPECIAL_CHARS_RE, (c) => ENTITY_MAP[c]!);
 }
 
 /**
@@ -159,26 +147,5 @@ export function encodeEntities(text: string): string {
 export function encodeAttributeValue(value: string): string {
   // Fast path: no special characters means nothing to encode
   if (!/[<>&'"\t\n\r]/.test(value)) return value;
-  return value.replace(ATTR_ENCODE_RE, (c) => {
-    switch (c) {
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case "&":
-        return "&amp;";
-      case "'":
-        return "&apos;";
-      case '"':
-        return "&quot;";
-      case "\t":
-        return "&#9;";
-      case "\n":
-        return "&#10;";
-      case "\r":
-        return "&#13;";
-      default:
-        return c;
-    }
-  });
+  return value.replace(ATTR_ENCODE_RE, (c) => ATTR_ENTITY_MAP[c]!);
 }

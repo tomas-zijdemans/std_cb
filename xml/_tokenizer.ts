@@ -138,16 +138,9 @@ const CC_D_UPPER = 68; // D
 const CC_P_UPPER = 80; // P
 const CC_S_UPPER = 83; // S
 
-// NOTE: These patterns cover the ASCII subset of XML 1.0 NameStartChar/NameChar.
-// The full spec (Production [4], [4a]) includes many Unicode ranges:
-//   NameStartChar ::= ":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] | ...
-//   NameChar ::= NameStartChar | "-" | "." | [0-9] | #xB7 | [#x0300-#x036F] | ...
-//
-// For pragmatic reasons, we use `charCodeAt(0) > 127` as a fallback for non-ASCII.
-// This is OVERLY PERMISSIVE: it accepts some characters the spec excludes (e.g.,
-// U+00D7 multiplication sign, U+00F7 division sign, U+037E Greek question mark).
-// However, invalid names are rare in real documents, and a fully compliant regex
-// would be ~200+ characters. This trade-off is acceptable for a non-validating parser.
+// NOTE: These patterns cover ASCII subset of XML 1.0 NameStartChar/NameChar.
+// Non-ASCII uses permissive `code > 127` fallback - accepts some invalid chars
+// but is pragmatic for a non-validating parser.
 
 /** Sentinel position used when position tracking is disabled. */
 const NO_POSITION: XmlPosition = { line: 0, column: 0, offset: 0 };
@@ -157,20 +150,6 @@ const NO_POSITION: XmlPosition = { line: 0, column: 0, offset: 0 };
  *
  * Processes XML input chunk by chunk, emitting tokens. Handles cross-chunk
  * boundaries correctly for all XML constructs.
- *
- * @example Basic usage
- * ```ts ignore
- * const tokenizer = new XmlTokenizer();
- * const tokens1 = tokenizer.process("<root>");
- * const tokens2 = tokenizer.process("</root>");
- * const remaining = tokenizer.finalize();
- * ```
- *
- * @example Without position tracking (faster)
- * ```ts ignore
- * const tokenizer = new XmlTokenizer({ trackPosition: false });
- * const tokens = tokenizer.process("<root/>");
- * ```
  */
 export class XmlTokenizer {
   #buffer = "";
@@ -441,6 +420,22 @@ export class XmlTokenizer {
     );
   }
 
+  /** Read a quoted string in DOCTYPE. Does not handle cross-chunk boundaries. */
+  #readDoctypeQuotedString(): string {
+    const quote = this.#doctypeQuoteChar;
+    const buffer = this.#buffer;
+    const bufferLen = buffer.length;
+    let value = "";
+    while (
+      this.#bufferIndex < bufferLen && buffer[this.#bufferIndex] !== quote
+    ) {
+      value += buffer[this.#bufferIndex];
+      this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
+    }
+    this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
+    return value;
+  }
+
   // ========================================================================
   // DEDICATED CAPTURE METHODS
   // These tight loops avoid per-character switch overhead for hot paths.
@@ -521,11 +516,8 @@ export class XmlTokenizer {
   }
 
   /**
-   * Capture comment content using indexOf for batch scanning.
-   * Returns true if complete comment found and emitted, false otherwise.
-   *
-   * Uses indexOf("-->") to find the terminator. Handles edge cases like
-   * multiple dashes (---) by letting char-by-char states handle them.
+   * Batch-scan comment using indexOf("-->"). Returns true if complete and emitted.
+   * When incomplete, consumes safe content (excluding trailing -) for char-by-char.
    */
   #captureComment(buffer: string, bufferLen: number): boolean {
     const endIdx = buffer.indexOf("-->", this.#bufferIndex);
@@ -580,10 +572,8 @@ export class XmlTokenizer {
   }
 
   /**
-   * Capture PI content using indexOf for batch scanning.
-   * Returns true if complete PI found and emitted, false otherwise.
-   *
-   * Uses indexOf("?>") to find the terminator.
+   * Batch-scan PI using indexOf("?>"). Returns true if complete and emitted.
+   * When incomplete, consumes safe content (excluding trailing ?) for char-by-char.
    */
   #capturePI(buffer: string, bufferLen: number): boolean {
     const endIdx = buffer.indexOf("?>", this.#bufferIndex);
@@ -639,15 +629,8 @@ export class XmlTokenizer {
   }
 
   /**
-   * Capture CDATA content using indexOf for batch scanning.
-   * Returns true if complete CDATA found and emitted, false otherwise.
-   *
-   * Uses indexOf("]]>") to jump directly to the terminator instead of
-   * checking each character individually. This provides ~95% speedup for
-   * CDATA-heavy documents while having zero impact on documents without CDATA.
-   *
-   * When terminator is not found, consumes as much as safely possible
-   * (everything except trailing `]` or `]]`) and lets char-by-char handle the rest.
+   * Batch-scan CDATA using indexOf("]]>"). Returns true if complete and emitted.
+   * When incomplete, consumes safe content (excluding trailing ] or ]]) for char-by-char.
    */
   #captureCDATA(buffer: string, bufferLen: number): boolean {
     const endIdx = buffer.indexOf("]]>", this.#bufferIndex);
@@ -1330,10 +1313,8 @@ export class XmlTokenizer {
 
         case State.DOCTYPE_NAME: {
           if (this.#isWhitespaceCode(code)) {
-            if (this.#doctypeName === "") {
-              this.#advanceWithCode(code);
-            } else {
-              this.#advanceWithCode(code);
+            this.#advanceWithCode(code);
+            if (this.#doctypeName !== "") {
               this.#state = State.DOCTYPE_AFTER_NAME;
             }
           } else if (code === CC_GT) {
@@ -1417,18 +1398,8 @@ export class XmlTokenizer {
             this.#advanceWithCode(code);
           } else if (code === CC_DQUOTE || code === CC_SQUOTE) {
             this.#doctypeQuoteChar = String.fromCharCode(code);
-            this.#doctypePublicId = "";
             this.#advanceWithCode(code);
-            // Note: DOCTYPE quoted strings must be in a single chunk.
-            // Cross-chunk handling is not supported for this edge case.
-            while (
-              this.#bufferIndex < bufferLen &&
-              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
-            ) {
-              this.#doctypePublicId += buffer[this.#bufferIndex];
-              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
-            }
-            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
+            this.#doctypePublicId = this.#readDoctypeQuotedString();
             this.#state = State.DOCTYPE_AFTER_PUBLIC_ID;
           } else {
             this.#error(`Expected quote to start public ID`);
@@ -1441,17 +1412,8 @@ export class XmlTokenizer {
             this.#advanceWithCode(code);
           } else if (code === CC_DQUOTE || code === CC_SQUOTE) {
             this.#doctypeQuoteChar = String.fromCharCode(code);
-            this.#doctypeSystemId = "";
             this.#advanceWithCode(code);
-            // Note: DOCTYPE quoted strings must be in a single chunk.
-            while (
-              this.#bufferIndex < bufferLen &&
-              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
-            ) {
-              this.#doctypeSystemId += buffer[this.#bufferIndex];
-              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
-            }
-            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
+            this.#doctypeSystemId = this.#readDoctypeQuotedString();
             this.#state = State.DOCTYPE_AFTER_NAME;
           } else if (code === CC_GT) {
             this.#callbacks.onDoctype?.(
@@ -1486,17 +1448,8 @@ export class XmlTokenizer {
             this.#advanceWithCode(code);
           } else if (code === CC_DQUOTE || code === CC_SQUOTE) {
             this.#doctypeQuoteChar = String.fromCharCode(code);
-            this.#doctypeSystemId = "";
             this.#advanceWithCode(code);
-            // Note: DOCTYPE quoted strings must be in a single chunk.
-            while (
-              this.#bufferIndex < bufferLen &&
-              buffer[this.#bufferIndex] !== this.#doctypeQuoteChar
-            ) {
-              this.#doctypeSystemId += buffer[this.#bufferIndex];
-              this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
-            }
-            this.#advanceWithCode(buffer.charCodeAt(this.#bufferIndex));
+            this.#doctypeSystemId = this.#readDoctypeQuotedString();
             this.#state = State.DOCTYPE_AFTER_NAME;
           } else {
             this.#error(`Expected quote to start system ID`);

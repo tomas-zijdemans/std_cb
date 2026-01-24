@@ -21,67 +21,19 @@ export type { StringifyOptions } from "./types.ts";
 /**
  * Converts an XML document or element to an XML string.
  *
- * @example Basic usage
+ * @example Usage
  * ```ts
  * import { stringify } from "@std/xml/stringify";
  * import { assertEquals } from "@std/assert";
  *
  * const element = {
  *   type: "element" as const,
- *   name: { raw: "greeting", local: "greeting" },
+ *   name: { raw: "root", local: "root" },
  *   attributes: {},
  *   children: [{ type: "text" as const, text: "Hello!" }],
  * };
  *
- * assertEquals(stringify(element), "<greeting>Hello!</greeting>");
- * ```
- *
- * @example With document and declaration
- * ```ts
- * import { stringify } from "@std/xml/stringify";
- * import { assertEquals } from "@std/assert";
- *
- * const doc = {
- *   declaration: {
- *     type: "declaration" as const,
- *     version: "1.0",
- *     line: 1,
- *     column: 1,
- *     offset: 0,
- *   },
- *   root: {
- *     type: "element" as const,
- *     name: { raw: "root", local: "root" },
- *     attributes: {},
- *     children: [],
- *   },
- * };
- *
- * assertEquals(stringify(doc), '<?xml version="1.0"?><root/>');
- * ```
- *
- * @example Pretty-printed output
- * ```ts
- * import { stringify } from "@std/xml/stringify";
- * import { assertEquals } from "@std/assert";
- *
- * const doc = {
- *   root: {
- *     type: "element" as const,
- *     name: { raw: "root", local: "root" },
- *     attributes: {},
- *     children: [
- *       {
- *         type: "element" as const,
- *         name: { raw: "child", local: "child" },
- *         attributes: {},
- *         children: [],
- *       },
- *     ],
- *   },
- * };
- *
- * assertEquals(stringify(doc, { indent: "  " }), "<root>\n  <child/>\n</root>");
+ * assertEquals(stringify(element), "<root>Hello!</root>");
  * ```
  *
  * @param node The XML document or element to serialize.
@@ -111,19 +63,15 @@ export function stringify(
   return serializeElement(node, indent, 0);
 }
 
-/**
- * Serializes an XML declaration to a string.
- */
+/** Serializes an XML declaration to a string. */
 function serializeDeclaration(decl: XmlDeclarationEvent): string {
-  let result = `<?xml version="${decl.version}"`;
-  if (decl.encoding !== undefined) {
-    result += ` encoding="${decl.encoding}"`;
-  }
-  if (decl.standalone !== undefined) {
-    result += ` standalone="${decl.standalone}"`;
-  }
-  result += "?>";
-  return result;
+  const encoding = decl.encoding !== undefined
+    ? ` encoding="${decl.encoding}"`
+    : "";
+  const standalone = decl.standalone !== undefined
+    ? ` standalone="${decl.standalone}"`
+    : "";
+  return `<?xml version="${decl.version}"${encoding}${standalone}?>`;
 }
 
 /**
@@ -185,11 +133,7 @@ function serializeElement(
     .map((child) => serializeNode(child, indent, depth + 1, indentFn))
     .join(newline);
 
-  if (indent !== undefined) {
-    return `${prefix}<${tagName}${attrsStr}>${newline}${childContent}${newline}${prefix}</${tagName}>`;
-  }
-
-  return `<${tagName}${attrsStr}>${childContent}</${tagName}>`;
+  return `${prefix}<${tagName}${attrsStr}>${newline}${childContent}${newline}${prefix}</${tagName}>`;
 }
 
 /**
@@ -210,7 +154,7 @@ function serializeNode(
       return serializeCData(node.text);
     case "comment": {
       const prefix = getIndent(depth);
-      return `${prefix}<!--${serializeComment(node.text)}-->`;
+      return `${prefix}<!--${validateCommentText(node.text)}-->`;
     }
   }
 }
@@ -235,13 +179,10 @@ function serializeCData(text: string): string {
 }
 
 /**
- * Validates and returns comment text.
- *
- * Per XML 1.0 §2.5, comments cannot contain `--` and cannot end with `-`.
- *
+ * Validates comment text per XML 1.0 §2.5: cannot contain `--` or end with `-`.
  * @throws {TypeError} If the comment text contains invalid sequences.
  */
-function serializeComment(text: string): string {
+function validateCommentText(text: string): string {
   if (text.includes("--")) {
     throw new TypeError(
       `Invalid comment: contains "--" which is forbidden in XML comments`,

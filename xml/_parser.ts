@@ -24,28 +24,13 @@ import { WHITESPACE_ONLY_RE } from "./_common.ts";
 
 /**
  * Normalizes attribute value per XML 1.0 §3.3.3.
- *
- * Per the specification:
- * - Literal whitespace (#x9, #xA) is replaced with space (#x20)
- * - Character references to whitespace (&#9;, &#10;, etc.) are preserved
- *
- * Note: #xD (carriage return) has been converted to #xA by line-ending
- * normalization in the tokenizer (§2.11), so we only need to handle #xA and #x9.
- *
- * @see {@link https://www.w3.org/TR/xml/#AVNormalize | XML 1.0 §3.3.3 Attribute-Value Normalization}
- *
- * @param raw The raw attribute value from the tokenizer.
- * @returns The normalized and entity-decoded attribute value.
+ * @see {@link https://www.w3.org/TR/xml/#AVNormalize}
  */
 function normalizeAttributeValue(raw: string): string {
-  // Step 1: Replace literal whitespace with space per §3.3.3
-  // This is done BEFORE entity decoding to preserve char refs like &#10;
-  // Fast path: skip regex if no whitespace to normalize (common case)
+  // Replace literal \t and \n with space BEFORE entity decoding (preserves &#10;)
   const normalized = raw.includes("\t") || raw.includes("\n")
     ? raw.replace(/[\t\n]/g, " ")
     : raw;
-
-  // Step 2: Decode entities (&#10; becomes actual \n, preserving char refs)
   return decodeEntities(normalized);
 }
 
@@ -97,24 +82,13 @@ class AttributeIteratorImpl implements XmlAttributeIterator {
  * Implements {@linkcode XmlTokenCallbacks} to receive tokens from the tokenizer,
  * and emits events via {@linkcode XmlEventCallbacks}. This enables zero-allocation
  * streaming from tokenizer through parser to consumer.
- *
- * @example Basic usage
- * ```ts ignore
- * const parser = new XmlEventParser({
- *   onStartElement(name, colonIndex, attrs, selfClosing, line, col, offset) {
- *     console.log(`Element: ${name}`);
- *   },
- * });
- *
- * const tokenizer = new XmlTokenizer();
- * tokenizer.process("<root><item/></root>", parser);
- * tokenizer.finalize(parser);
- * parser.finalize();
- * ```
  */
 export class XmlEventParser implements XmlTokenCallbacks {
   #callbacks: XmlEventCallbacks;
-  #options: ParseStreamOptions;
+  #ignoreWhitespace: boolean;
+  #ignoreComments: boolean;
+  #ignoreProcessingInstructions: boolean;
+  #coerceCDataToText: boolean;
 
   #elementStack: Array<{
     rawName: string;
@@ -135,20 +109,16 @@ export class XmlEventParser implements XmlTokenCallbacks {
   /** Reusable attribute iterator. */
   #attrIterator = new AttributeIteratorImpl();
 
-  /**
-   * Constructs a new XmlEventParser.
-   *
-   * @param callbacks Callbacks to invoke for each event.
-   * @param options Options for filtering and behavior.
-   */
   constructor(callbacks: XmlEventCallbacks, options: ParseStreamOptions = {}) {
     this.#callbacks = callbacks;
-    this.#options = options;
+    this.#ignoreWhitespace = options.ignoreWhitespace ?? false;
+    this.#ignoreComments = options.ignoreComments ?? false;
+    this.#ignoreProcessingInstructions = options.ignoreProcessingInstructions ??
+      false;
+    this.#coerceCDataToText = options.coerceCDataToText ?? false;
   }
 
-  // ==========================================================================
   // XmlTokenCallbacks implementation
-  // ==========================================================================
 
   onStartTagOpen(
     name: string,
@@ -240,13 +210,8 @@ export class XmlEventParser implements XmlTokenCallbacks {
     column: number,
     offset: number,
   ): void {
-    const { ignoreWhitespace = false } = this.#options;
     const text = decodeEntities(content);
-
-    if (ignoreWhitespace && WHITESPACE_ONLY_RE.test(text)) {
-      return;
-    }
-
+    if (this.#ignoreWhitespace && WHITESPACE_ONLY_RE.test(text)) return;
     this.#callbacks.onText?.(text, line, column, offset);
   }
 
@@ -256,9 +221,7 @@ export class XmlEventParser implements XmlTokenCallbacks {
     column: number,
     offset: number,
   ): void {
-    const { coerceCDataToText = false } = this.#options;
-
-    if (coerceCDataToText) {
+    if (this.#coerceCDataToText) {
       this.#callbacks.onText?.(content, line, column, offset);
     } else {
       this.#callbacks.onCData?.(content, line, column, offset);
@@ -271,12 +234,7 @@ export class XmlEventParser implements XmlTokenCallbacks {
     column: number,
     offset: number,
   ): void {
-    const { ignoreComments = false } = this.#options;
-
-    if (ignoreComments) {
-      return;
-    }
-
+    if (this.#ignoreComments) return;
     this.#callbacks.onComment?.(content, line, column, offset);
   }
 
@@ -287,12 +245,7 @@ export class XmlEventParser implements XmlTokenCallbacks {
     column: number,
     offset: number,
   ): void {
-    const { ignoreProcessingInstructions = false } = this.#options;
-
-    if (ignoreProcessingInstructions) {
-      return;
-    }
-
+    if (this.#ignoreProcessingInstructions) return;
     this.#callbacks.onProcessingInstruction?.(
       target,
       content,
@@ -320,21 +273,10 @@ export class XmlEventParser implements XmlTokenCallbacks {
     );
   }
 
-  onDoctype(
-    _name: string,
-    _publicId: string | undefined,
-    _systemId: string | undefined,
-    _line: number,
-    _column: number,
-    _offset: number,
-  ): void {
-    // DOCTYPE is parsed by tokenizer but not emitted as an event
-    // (could add onDoctype to XmlEventCallbacks if needed in future)
-  }
+  // DOCTYPE parsed by tokenizer but not emitted as event
+  onDoctype(): void {}
 
-  // ==========================================================================
   // Public API
-  // ==========================================================================
 
   /**
    * Finalize parsing and validate that all elements are closed.
